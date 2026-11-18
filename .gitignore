@@ -96,3 +96,7 @@ ollama-models-before-vm.txt
 # Downloaded ORT profiling runs (can be tens of MB each)
 bench/results/profiles/*
 !bench/results/profiles/.gitkeep
+
+# Local chat transcripts and model download outcomes.
+scripts/runs.jsonl
+scripts/pulls.jsonl

@@ -83,7 +83,7 @@ bool apply_stop_sequences(std::string& output, const std::vector<std::string>& s
 // a per-model generation suffix. Built via chat_format_for().
 // ---------------------------------------------------------------------------
 
-enum class ChatFormatKind { ChatML, Gemma, Llama3, Phi3 };
+enum class ChatFormatKind { ChatML, Gemma, Llama3, Phi3, Ministral3 };
 
 // How the system prompt is emitted.
 // - DedicatedTurn: its own turn (ChatML / Llama-3 / Gemma 4 system role).

@@ -4,7 +4,7 @@
     {
       "_comment": "Google Gemma 3 270M instruction model, community quantization pinned by SHA-256. Xbox One X CPU baseline candidate. Console correctness, memory and speed are unverified. Gemma Terms apply. No model weights are bundled.",
       "name": "gemma3-270m",
-      "display": "Gemma 3 270M (GGUF \u00b7 CPU)",
+      "display": "Gemma 3 270M (GGUF · CPU)",
       "kind": "gguf",
       "hf_base_url": "https://huggingface.co/unsloth/gemma-3-270m-it-GGUF/resolve/main",
       "files": [
@@ -12,6 +12,23 @@
           "filename": "gemma-3-270m-it-Q4_K_M.gguf",
           "approx_bytes": 253115424,
           "sha256": "b1baabd6b729e4041822220d3e648e00d99cac5df86b10dffb77bcccf0688e39"
+        }
+      ],
+      "n_ctx": 1024,
+      "n_predict": 128,
+      "gpu_layers": 0
+    },
+    {
+      "_comment": "Mistral AI Ministral 3 3B Instruct 2512. Official Q4_K_M language weights only; no mmproj or vision encoder is downloaded. Apache-2.0. Architecture supported by the existing llama.cpp pin. One X console validation pending. See docs/ministral3-one-x.md for provenance, template and memory decisions.",
+      "name": "ministral3-3b-instruct",
+      "display": "Ministral 3 3B Instruct (text · CPU · Q4_K_M)",
+      "kind": "gguf",
+      "hf_base_url": "https://huggingface.co/mistralai/Ministral-3-3B-Instruct-2512-GGUF/resolve/eb599d408350ea2bb60452cb86be7c7b2fc28227",
+      "files": [
+        {
+          "filename": "Ministral-3-3B-Instruct-2512-Q4_K_M.gguf",
+          "approx_bytes": 2147023008,
+          "sha256": "9ed150d4367e68df0ac8e1540f6ddc65b42d0ee26378329d1ecbca60f93fc5f8"
         }
       ],
       "n_ctx": 1024,

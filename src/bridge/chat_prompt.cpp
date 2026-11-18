@@ -202,6 +202,15 @@ ChatFormat chat_format_for(const std::string& model_id) {
         f.system_style = SystemStyle::MergeIntoFirstUser;
         f.stop_sequences = {"<end_of_turn>"};
         f.gen_suffix = {};
+    } else if (const std::string b = to_lower(model_basename(model_id));
+               b.find("ministral3-") == 0 || b.find("ministral-3-") == 0) {
+        // Plain-text subset of the official Ministral 3 Instruct GGUF template.
+        // User and assistant delimiters differ, so the symmetric role layout
+        // below cannot represent it. The pinned GGUF tokenizer adds BOS.
+        f.kind = ChatFormatKind::Ministral3;
+        f.system_style = SystemStyle::DedicatedTurn;
+        f.turn_close = "</s>";
+        f.stop_sequences = {"</s>"};
     } else if (model_is_llama(model_id)) {
         // Meta Llama-3 / 3.1 / 3.2 instruct template.
         f.kind = ChatFormatKind::Llama3;
@@ -248,6 +257,8 @@ ChatFormat chat_format_for(const std::string& model_id) {
 }
 
 std::string ChatFormat::render_system_prefix(const std::string& system) const {
+    if (kind == ChatFormatKind::Ministral3)
+        return "[SYSTEM_PROMPT]" + system + "[/SYSTEM_PROMPT]";
     // Must stay byte-identical to what render_prompt emits before the first
     // user turn — a context shift pins exactly this many tokens (#169).
     // bos belongs here rather than in render_prompt: this is the one function
@@ -264,6 +275,12 @@ std::string ChatFormat::render_prompt(const std::string& system,
     // System: dedicated turn (ChatML / Llama-3 / Gemma 4, emitted
     // unconditionally) or merged into the first user turn (Gemma 3).
     std::string p = render_system_prefix(system);
+
+    if (kind == ChatFormatKind::Ministral3) {
+        for (const ChatTurn& t : history)
+            p += "[INST]" + t.user + "[/INST]" + t.assistant + "</s>";
+        return p + "[INST]" + final_user + "[/INST]";
+    }
 
     bool sys_pending = (system_style == SystemStyle::MergeIntoFirstUser) && !system.empty();
     auto user_content = [&](const std::string& u) -> std::string {
@@ -287,6 +304,8 @@ std::string ChatFormat::render_prompt(const std::string& system,
 }
 
 std::string ChatFormat::render_delta(const std::string& user, bool prev_ended_with_stop) const {
+    if (kind == ChatFormatKind::Ministral3)
+        return (prev_ended_with_stop ? std::string{} : "</s>") + "[INST]" + user + "[/INST]";
     // The reused KV already holds the previous assistant tokens. If generation
     // stopped on the stop token, that token is in the KV — emit only any trailing
     // glue of turn_close beyond the stop (ChatML/Gemma: "\n"; Llama-3: empty).

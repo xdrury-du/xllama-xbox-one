@@ -829,8 +829,9 @@ host Release smoke (quality + peak)
 
 ## Unit test map (host suite)
 
-The fork adds `test_xbox_one_profile.cpp` for the experiment model allowlist
-and exact download source/hash policy. See the [One X runbook](xbox-one-experiment.md).
+The fork adds `test_xbox_one_profile.cpp` for the experiment model allowlist,
+exact artifact pins and catalogue agreement. Ministral plain-text prompt rendering
+is covered by `test_chat_prompt.cpp`; `test_xbox_chat_client.py` exercises the Mac proxy. See the [One X runbook](xbox-one-experiment.md).
 
 One doctest binary, `xllama-tests`, built from `tests/test_*.cpp`. CI prints
 the case and assertion totals (`Verify the test-suite size`); this page does

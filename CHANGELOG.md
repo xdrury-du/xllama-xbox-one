@@ -1,5 +1,11 @@
 # Changelog
 
+## Fork: Ministral 3 3B Instruct text integration
+
+- Add the pinned official Ministral Q4_K_M text artifact, shared instruction
+  formatting and Mac model selection/download. Preserve the Gemma default and
+  One X CPU profile. See the [integration review](docs/ministral3-one-x.md).
+
 ## Fork: Xbox One X CPU baseline
 
 - Add a Jaguar AVX build lane, CPU-only GGUF inference and a pinned Gemma-only
