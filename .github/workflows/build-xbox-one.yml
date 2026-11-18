@@ -72,7 +72,7 @@ jobs:
         shell: pwsh
         run: |
           $dest = New-Item -ItemType Directory -Force artifacts/xbox-one-cpu
-          Get-ChildItem uwp/AppPackages -Recurse -File | Where-Object { $_.Extension -in '.msix', '.appx' } | Copy-Item -Destination $dest
+          Get-ChildItem uwp/AppPackages -Recurse -File | Where-Object { $_.Extension -eq '.msix' -or $_.Name -eq 'Microsoft.VCLibs.x64.14.00.appx' } | Copy-Item -Destination $dest
           Copy-Item uwp/xllama-test.cer $dest
           @{
             source_commit = '${{ github.sha }}'
@@ -83,9 +83,10 @@ jobs:
             backend = 'llamacpp, GGUF D3D12 disabled'
             model = 'gemma3-270m'
           } | ConvertTo-Json | Set-Content (Join-Path $dest 'build-info.json')
-          Get-ChildItem $dest -File | Sort-Object Name | ForEach-Object {
+          $hashes = Get-ChildItem $dest -File | Sort-Object Name | ForEach-Object {
             '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
-          } | Set-Content (Join-Path $dest 'SHA256SUMS')
+          }
+          [System.IO.File]::WriteAllText((Join-Path $dest 'SHA256SUMS'), (($hashes -join "`n") + "`n"), [System.Text.UTF8Encoding]::new($false))
       - uses: actions/upload-artifact@v7
         with:
           name: xllama-xbox-one-cpu
