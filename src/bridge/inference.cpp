@@ -6,6 +6,7 @@
 #include "xllama/logit_dump.h"
 #include "xllama/path_utils.h"
 #include "xllama/platform.h"
+#include "xllama/xbox_one_profile.h"
 
 #include <algorithm>
 #include <chrono>
@@ -972,6 +973,13 @@ InferenceResult run_inference_llama(const InferenceParams& params) {
 namespace xllama {
 
 InferenceResult run_inference(const InferenceParams& params) {
+#ifdef XLLAMA_XBOX_ONE
+    if (!xbox_one_model_allowed(params.model_path)) {
+        InferenceResult res;
+        res.error_msg = "model is not approved for the Xbox One experiment";
+        return res;
+    }
+#endif
 #if defined(XLLAMA_USE_ORT) && defined(XLLAMA_USE_LLAMA)
     // Layout-aware Auto (same helper as Session) so bench paths using bare
     // model names from model.txt also dispatch correctly for GGUF layouts.

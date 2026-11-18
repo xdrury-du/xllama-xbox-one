@@ -535,7 +535,7 @@ std::string format_d3d12_selftest_row(const D3d12SelftestRow& r, const char* hos
 
 } // namespace xllama
 
-    #if !defined(_WIN32)
+    #if !defined(_WIN32) || defined(XLLAMA_XBOX_ONE)
 
 namespace xllama {
 

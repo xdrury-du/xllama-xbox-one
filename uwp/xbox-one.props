@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Copyright (c) 2026 xllama contributors -->
+<!-- SPDX-License-Identifier: MIT -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <XllamaCpuOptions>/arch:AVX2</XllamaCpuOptions>
+    <XllamaCpuOptions Condition="'$(XllamaXboxOne)' == 'true'">/arch:AVX /DXLLAMA_XBOX_ONE=1</XllamaCpuOptions>
+  </PropertyGroup>
+  <ItemDefinitionGroup Condition="'$(XllamaXboxOne)' == 'true'">
+    <ClCompile>
+      <ForcedIncludeFiles>$(ProjectDir)xbox-one-build.h;%(ForcedIncludeFiles)</ForcedIncludeFiles>
+    </ClCompile>
+  </ItemDefinitionGroup>
+</Project>

@@ -39,6 +39,8 @@
         #include "xllama/api_activity.h"
     #endif
 
+    #include "xllama/xbox_one_profile.h"
+
     #include <algorithm>
     #include <chrono>
     #include <cstdio>
@@ -67,7 +69,9 @@ namespace xllama {
 // builds keep the classic SmolLM2 CPU int4.
 // Matches bench/configs/settings-modern.json and docs/recommended-config.md.
 static std::wstring DefaultChatModelId() {
-    #if defined(XLLAMA_USE_LLAMA)
+    #if defined(XLLAMA_XBOX_ONE)
+    return L"gemma3-270m";
+    #elif defined(XLLAMA_USE_LLAMA)
     return L"lfm25-350m";
     #else
     return L"smollm2-360m-cpu-int4";
@@ -521,6 +525,14 @@ void MainPageController::Init() {
         m_history.LoadIndex();
     }
     LoadSettings();
+    #ifdef XLLAMA_XBOX_ONE
+    if (!::xllama::xbox_one_model_allowed(::xllama::wstring_to_utf8(m_model_filename)))
+        m_model_filename = DefaultChatModelId();
+    m_n_predict = std::min(m_n_predict, 128);
+    m_routing = 0;
+    m_gpu_model.clear();
+    #endif
+
     ApplyDebugDashboard(m_debug_dashboard, /*persist_flag=*/false);
 
     EnsureModelAsync();
@@ -2746,6 +2758,11 @@ fire_and_forget MainPageController::EnsureModelNamedAsync(std::wstring model_nam
                        .c_str());
         co_await resume_background();
 
+    #ifdef XLLAMA_XBOX_ONE
+        if (!::xllama::xbox_one_model_allowed(::xllama::wstring_to_utf8(model_name)))
+            throw std::runtime_error("Model is not approved for the Xbox One experiment");
+    #endif
+
         // Load the catalogue up-front so every provisioning check can compare against
         // the entry's CURRENT expected files (auto-upgrade a stale quant) instead of
         // accepting any gguf. Empty expected → loose fallback (USB/WDP/no entry).
@@ -2882,7 +2899,7 @@ fire_and_forget MainPageController::EnsureModelNamedAsync(std::wstring model_nam
             }
         }
 
-    #ifndef XLLAMA_STORE_SKU
+    #if !defined(XLLAMA_STORE_SKU) && !defined(XLLAMA_XBOX_ONE)
         // Check 3: USB removable storage via KnownFolders.RemovableDevices
         // (requires <uap:Capability Name="removableStorage" /> in manifest).
         // Enumerates all removable drives; looks for xllama/models/<name>/genai_config.json.

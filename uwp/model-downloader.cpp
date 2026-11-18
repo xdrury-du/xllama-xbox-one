@@ -16,6 +16,7 @@
     #include "xllama/path_utils.h"
     #include "xllama/session_spec.h"
     #include "xllama/withdrawn_models.h"
+    #include "xllama/xbox_one_profile.h"
 
     #include "inference-bridge.h" // gguf_gpu_layers_knob
     #include "xllama/platform.h"
@@ -254,6 +255,15 @@ IAsyncAction ModelDownloader::DownloadAsync(std::wstring hf_repo_url, std::wstri
                                             std::function<void(uint64_t, uint64_t)> on_progress,
                                             std::function<void(bool, std::wstring)> on_done,
                                             std::vector<std::wstring> publish_files) {
+    #ifdef XLLAMA_XBOX_ONE
+    if (files.size() != 1 ||
+        !xbox_one_download_allowed(hf_repo_url, files[0].filename, files[0].sha256)) {
+        if (dispatcher)
+            co_await winrt::resume_foreground(dispatcher);
+        on_done(false, L"Download is not approved for the Xbox One experiment");
+        co_return;
+    }
+    #endif
     ModelWriteOperation writer(WriterGate(), std::filesystem::path(local_dir));
     bool finished = false;
     auto done = [&writer, &on_done, &finished](bool ok, std::wstring error) {
@@ -992,6 +1002,19 @@ std::vector<ManifestEntry> LoadModelManifest(ManifestTrust* trust, bool include_
     #else
     if (trust)
         *trust = bundled_trust;
+    #endif
+    #ifdef XLLAMA_XBOX_ONE
+    // Use the sealed package's reviewed hashes and URLs. LocalState cannot
+    // replace the model, introduce an unchecked lineage or trigger a fallback.
+    (void)include_local_override;
+    entries.erase(std::remove_if(entries.begin(), entries.end(),
+                                 [](const ManifestEntry& e) {
+                                     return !xbox_one_model_allowed(wstring_to_utf8(e.name));
+                                 }),
+                  entries.end());
+    if (entries.empty())
+        log_output("[manifest] ERROR: Xbox One experiment catalogue missing\n");
+    return entries;
     #endif
     // 2. LocalState override (uploadable via Device Portal, no reinstall),
     // merged PER ENTRY: a same-name entry replaces the bundled one, a new name

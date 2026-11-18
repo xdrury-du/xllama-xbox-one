@@ -1,5 +1,9 @@
 # Using xllama on Xbox Series S consoles
 
+> This fork adds an experimental Xbox One X CPU build. Follow the
+> [One X experiment guide](xbox-one-experiment.md); upstream Series-console releases and
+> performance figures do not establish One X compatibility.
+
 Gamepad UI for the on-console **demo shell**. Supported on Series S and Series X. The project measures on Series S; the Series X runs come from an independent tester. The product is the local
 inference stack (games and assistants), not this chat surface — see
 [positioning.md](./positioning.md). For installation see

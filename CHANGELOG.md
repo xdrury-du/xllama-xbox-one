@@ -1,5 +1,11 @@
 # Changelog
 
+## Fork: Xbox One X CPU baseline
+
+- Add a Jaguar AVX build lane, CPU-only GGUF inference and a pinned Gemma-only
+  experiment catalogue. Console validation remains pending. See the
+  [One X runbook](docs/xbox-one-experiment.md).
+
 All notable changes to xllama are documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 

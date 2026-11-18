@@ -1,0 +1,93 @@
+# Copyright (c) 2026 xllama contributors
+# SPDX-License-Identifier: MIT
+name: Xbox One CPU experiment
+
+on:
+  push:
+    branches: [codex/xbox-one-cpu-baseline]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xbox-one-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  host-tests:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: recursive
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake build-essential libcurl4-openssl-dev
+      - name: Build and test shared core
+        run: |
+          cmake --preset linux-test
+          cmake --build build/linux-test -j2
+          ctest --test-dir build/linux-test --output-on-failure
+      - name: Check catalogue and documentation coherence
+        run: python3 scripts/check-coherence.py
+
+  package:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          submodules: false
+      - name: Prepare pinned llama.cpp
+        shell: bash
+        run: |
+          git submodule update --init --depth 1 llama.cpp
+          bash scripts/apply-uwp-patches.sh
+          bash scripts/check-uwp-sources.sh
+      - name: Build Jaguar AVX CPU package
+        shell: pwsh
+        run: |
+          ./scripts/build-uwp.ps1 -Configuration Release -Platform x64 -Backend llamacpp -XboxOne -BuildRevision ${{ github.run_number }}
+      - name: Verify packaged model catalogue
+        shell: pwsh
+        run: |
+          $msix = Get-ChildItem uwp/AppPackages -Filter *.msix -Recurse | Select-Object -First 1
+          if (-not $msix) { throw 'No MSIX produced' }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($msix.FullName)
+          try {
+            $entry = $archive.Entries | Where-Object { $_.FullName.Replace('\', '/') -eq 'models/manifest.json' }
+            if (@($entry).Count -ne 1) { throw 'Expected exactly one packaged catalogue' }
+            $reader = [System.IO.StreamReader]::new($entry.Open())
+            try { $catalogue = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
+            if (@($catalogue.models).Count -ne 1 -or $catalogue.models[0].name -ne 'gemma3-270m') {
+              throw 'Package contains a model outside the experiment allowlist'
+            }
+            if ($archive.Entries | Where-Object { $_.FullName -match '\.gguf$|manifest\.xbox-one\.json$' }) {
+              throw 'Package contains unexpected weights or an extra catalogue'
+            }
+          } finally { $archive.Dispose() }
+      - name: Stage install files and provenance
+        shell: pwsh
+        run: |
+          $dest = New-Item -ItemType Directory -Force artifacts/xbox-one-cpu
+          Get-ChildItem uwp/AppPackages -Recurse -File | Where-Object { $_.Extension -in '.msix', '.appx' } | Copy-Item -Destination $dest
+          Copy-Item uwp/xllama-test.cer $dest
+          @{
+            source_commit = '${{ github.sha }}'
+            source_repository = '${{ github.repository }}'
+            workflow_run = '${{ github.run_id }}'
+            target = 'Xbox One X (unverified until console smoke test)'
+            cpu = 'AVX, no AVX2/FMA3/BMI2'
+            backend = 'llamacpp, GGUF D3D12 disabled'
+            model = 'gemma3-270m'
+          } | ConvertTo-Json | Set-Content (Join-Path $dest 'build-info.json')
+          Get-ChildItem $dest -File | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          } | Set-Content (Join-Path $dest 'SHA256SUMS')
+      - uses: actions/upload-artifact@v7
+        with:
+          name: xllama-xbox-one-cpu
+          path: artifacts/xbox-one-cpu/
+          retention-days: 14

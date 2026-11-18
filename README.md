@@ -1,5 +1,9 @@
 # xllama
 
+> This fork adds an experimental Xbox One X CPU build. Follow the
+> [One X experiment guide](docs/xbox-one-experiment.md); upstream Series-console releases and
+> performance figures do not establish One X compatibility.
+
 **xllama — local LLM inference on Xbox Series S and Series X in Developer Mode**
 
 Run a language model on your own Xbox Series S or Series X, with chat, an API on your local network, image generation and experimental on-device fine-tuning.
