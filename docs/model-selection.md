@@ -1,5 +1,9 @@
 # Model Selection Checklist
 
+> This fork adds an experimental Xbox One X CPU build. Follow the
+> [One X experiment guide](xbox-one-experiment.md); upstream Series-console releases and
+> performance figures do not establish One X compatibility.
+
 > **SSOT for the model catalogue and backend selection.** The catalogue data
 > lives in [`uwp/models/manifest.json`](../uwp/models/manifest.json); this file
 > is the narrative source of truth for limits, licensing, backend routing, and

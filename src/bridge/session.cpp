@@ -12,6 +12,7 @@
 #include "xllama/routing_policy.h"
 #include "xllama/session_hub.h"
 #include "xllama/utf8_utils.h"
+#include "xllama/xbox_one_profile.h"
 
 #include <algorithm>
 #include <chrono>
@@ -1339,6 +1340,13 @@ std::unique_ptr<Session> create_llama(const SessionParams& sp, std::string* err)
 namespace xllama {
 
 std::unique_ptr<Session> Session::create(const SessionParams& sp, std::string* err) {
+#ifdef XLLAMA_XBOX_ONE
+    if (!xbox_one_model_allowed(sp.model_path)) {
+        if (err)
+            *err = "model is not approved for the Xbox One experiment";
+        return nullptr;
+    }
+#endif
 #if defined(XLLAMA_USE_ORT) && defined(XLLAMA_USE_LLAMA)
     Backend b = sp.backend;
     if (b == Backend::Auto) {

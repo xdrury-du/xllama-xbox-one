@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+#Requires -Version 7.0
 <#
 .SYNOPSIS
     Build the xllama UWP package for Xbox (Windows.Xbox device family; measured on Series S).
@@ -45,10 +45,16 @@ param(
     # Store SKU: XLLAMA_STORE_SKU — no LAN API, no USB models, no headless flags;
     # AppxManifest.store.xml (internetClient only). Dev Mode remains the default.
     # See docs/release-readiness.md. Still test-signed.
-    [switch]$StoreSku       = $false
+    [switch]$StoreSku       = $false,
+    # Jaguar AVX CPU baseline, GPU offload disabled, pinned experiment catalogue.
+    [switch]$XboxOne        = $false
 )
 
 $ErrorActionPreference = "Stop"
+
+if ($XboxOne -and ($Backend -ne "llamacpp" -or $StoreSku -or $Configuration -ne "Release")) {
+    throw "XboxOne requires Release, -Backend llamacpp and the Developer Mode package."
+}
 
 $RepoRoot = Split-Path $PSScriptRoot -Parent
 $SlnPath  = Join-Path $RepoRoot "uwp\xllama.sln"
@@ -227,6 +233,9 @@ $MsBuildArgs = @(
     "/m",
     "/nologo"
 )
+if ($XboxOne) {
+    $MsBuildArgs += "/p:XllamaXboxOne=true"
+}
 if ($StoreSku) {
     $MsBuildArgs += "/p:XllamaStoreSku=true"
 }
@@ -237,9 +246,11 @@ if ($Backend -ne "ort") {
     # ActiveCfg-only (no Build.0 — the ORT variants must not compile it, the
     # submodule may be absent there), so the solution build resolves the
     # ProjectReference path but does not build the lib itself (LNK1181).
+    $CpuProfileArgs = @()
+    if ($XboxOne) { $CpuProfileArgs += "/p:XllamaXboxOne=true" }
     $GgmlProj = Join-Path $RepoRoot "uwp/ggml-uwp.vcxproj"
     Write-Host "Pre-building ggml-uwp.vcxproj ($Configuration|$Platform) ..."
-    & $MsBuild $GgmlProj "/p:Configuration=$Configuration" "/p:Platform=$Platform" "/m" "/nologo"
+    & $MsBuild $GgmlProj @CpuProfileArgs "/p:Configuration=$Configuration" "/p:Platform=$Platform" "/m" "/nologo"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "ggml-uwp build failed ($LASTEXITCODE)"
         exit $LASTEXITCODE
@@ -248,7 +259,7 @@ if ($Backend -ne "ort") {
     # proposals, ADR 0004): ActiveCfg-only in the solution, so build it here.
     $CommonProj = Join-Path $RepoRoot "uwp/llama-common-uwp.vcxproj"
     Write-Host "Pre-building llama-common-uwp.vcxproj ($Configuration|$Platform) ..."
-    & $MsBuild $CommonProj "/p:Configuration=$Configuration" "/p:Platform=$Platform" "/m" "/nologo"
+    & $MsBuild $CommonProj @CpuProfileArgs "/p:Configuration=$Configuration" "/p:Platform=$Platform" "/m" "/nologo"
     if ($LASTEXITCODE -ne 0) {
         Write-Error "llama-common-uwp build failed ($LASTEXITCODE)"
         exit $LASTEXITCODE

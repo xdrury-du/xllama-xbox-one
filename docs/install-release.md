@@ -1,5 +1,9 @@
 # Install a release build on Xbox Series S consoles
 
+> This fork adds an experimental Xbox One X CPU build. Follow the
+> [One X experiment guide](xbox-one-experiment.md); upstream Series-console releases and
+> performance figures do not establish One X compatibility.
+
 Install a tagged app release or a specific CI MSVC package on an Xbox in
 Developer Mode. Supported on Series S and Series X. The project measures on Series S; the Series X runs come from an independent tester.
 The current app release is

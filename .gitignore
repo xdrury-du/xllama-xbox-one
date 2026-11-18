@@ -19,6 +19,7 @@ models/
 !uwp/models/
 uwp/models/*
 !uwp/models/manifest.json
+!uwp/models/manifest.xbox-one.json
 
 # Visual Studio
 .vs/
