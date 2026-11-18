@@ -72,6 +72,18 @@ if (-not (Test-Path $SlnPath)) {
     exit 1
 }
 
+# Build the One X probe's conservative DXBC shader with the installed SDK.
+# The inference backend's Series shaders are not used by this probe.
+if ($XboxOne) {
+    $fxc = Get-ChildItem (Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10\bin\*\x64\fxc.exe') |
+        Sort-Object FullName -Descending | Select-Object -First 1
+    if (-not $fxc) { throw 'Windows SDK fxc.exe is required for the One X GPU probe' }
+    $probeShader = Join-Path $RepoRoot 'shaders\xbox_one_gpu_probe.hlsl'
+    $probeHeader = Join-Path $RepoRoot 'shaders\generated\xbox_one_gpu_probe_dxbc.h'
+    & $fxc.FullName /nologo /T cs_5_0 /E CSMain /O3 /Ges /WX /Fh $probeHeader /Vn g_xbox_one_gpu_probe $probeShader
+    if ($LASTEXITCODE -ne 0) { throw 'One X probe shader compilation failed' }
+}
+
 # ---------------------------------------------------------------------------
 # Certificate handling: reuse existing cert unless -ForceNewCert is passed.
 # This avoids reinstalling the trust cert on the console every build.

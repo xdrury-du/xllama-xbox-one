@@ -82,6 +82,15 @@ this is Developer Mode research, not a hosted service.
 | `POST`    | `/v1/images/generations` | SD-Turbo image gen (`prompt`, `steps` 1–4, `seed`); returns OpenAI-ish `{data:[{b64_json,path}]}` (#118). Shares process-wide compute admission with chat, embeddings and training. |
 | `OPTIONS` | _any_                    | CORS preflight (`204` + `Allow-Methods/Headers`) for browser clients.                                                                                                               |
 
+### One X GPU diagnostic (`POST /v1/diagnostics/gpu`)
+
+Only the One X experiment build exposes this opt-in route. An empty JSON
+object requests one cached hardware compute probe per process. It shares
+compute admission with generation and may return busy. A JSON result with
+HTTP 200 reports the measured stage, capability query results and compute
+correctness, including failures. It does not enable GPU inference. See the
+[probe runbook](xbox-one-gpu-probe.md) for the success criteria and limits.
+
 ### Model download (`POST /api/pull`)
 
 The request is `{"model":"<catalogue-id-or-alias>","stream":true}`; `stream` defaults to

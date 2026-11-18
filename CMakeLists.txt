@@ -82,6 +82,7 @@ add_library(xllama STATIC
     src/bridge/personalize.cpp
     src/bridge/autopilot.cpp
     src/bridge/capture_probe.cpp
+    src/bridge/gpu_probe.cpp
     src/bridge/d3d12_compute.cpp
     src/bridge/ggml_d3d12.cpp
 )

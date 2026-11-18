@@ -1,5 +1,11 @@
 # Changelog
 
+## Fork: Xbox One X GPU access probe
+
+- Add an opt-in LAN diagnostic for device capabilities and one checked FP32
+  matrix-vector shader dispatch. CPU inference stays enabled. See the
+  [probe runbook](docs/xbox-one-gpu-probe.md).
+
 ## Fork: Ministral 3 3B Instruct text integration
 
 - Add the pinned official Ministral Q4_K_M text artifact, shared instruction

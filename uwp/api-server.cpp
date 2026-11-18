@@ -27,6 +27,7 @@
     #include "xllama/api_pull_policy.h"
     #include "xllama/chat_prompt.h"
     #include "xllama/compute_admission.h"
+    #include "xllama/gpu_probe.h"
     #include "xllama/http_framing.h"
     #include "xllama/model_provision.h"
     #include "xllama/path_utils.h"
@@ -1937,6 +1938,18 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
             write_response(socket, "200 OK", "{\"status\":\"ok\",\"service\":\"xllama\"}");
             return;
         }
+
+    #ifdef XLLAMA_XBOX_ONE
+        if (req.method == "POST" && req.path == "/v1/diagnostics/gpu") {
+            auto permit = acquire_compute_job_or_busy();
+            if (!permit) {
+                write_response(socket, ::xllama::kApiBusyStatus, error_json("busy"));
+                return;
+            }
+            write_response(socket, "200 OK", ::xllama::gpu_probe_json());
+            return;
+        }
+    #endif
 
         // Model discovery: clients probe /v1/models (OpenAI SDK) and /api/tags
         // (Ollama-aware) before completing.
