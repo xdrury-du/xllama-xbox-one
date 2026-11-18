@@ -4,7 +4,7 @@ name: Xbox One CPU experiment
 
 on:
   push:
-    branches: [codex/xbox-one-cpu-baseline, codex/ministral3-one-x]
+    branches: [codex/xbox-one-cpu-baseline, codex/ministral3-one-x, codex/one-x-gpu-probe]
   workflow_dispatch:
 
 permissions:
@@ -83,7 +83,7 @@ jobs:
             workflow_run = '${{ github.run_id }}'
             target = 'Xbox One X (unverified until console smoke test)'
             cpu = 'AVX, no AVX2/FMA3/BMI2'
-            backend = 'llamacpp, GGUF D3D12 disabled'
+            backend = 'llamacpp CPU inference; opt-in isolated D3D12 probe'
             models = @('gemma3-270m', 'ministral3-3b-instruct')
           } | ConvertTo-Json | Set-Content (Join-Path $dest 'build-info.json')
           $hashes = Get-ChildItem $dest -File | Sort-Object Name | ForEach-Object {

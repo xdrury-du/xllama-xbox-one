@@ -81,6 +81,7 @@ Header modules (`include/xllama/`), all WinRT-free so they are host-testable:
 | `utf8_utils.h`                     | `utf8_to_wstring`, `wstring_to_utf8` (Windows/UWP)                                                                                                                                                    |
 | `api_policy.h`                     | `classify_api_tools` — a tool proposal is text in the response; the process does not execute tools                                                                                                    |
 | `capture_probe.h`                  | GraphicsCapture availability probe (metadata only; never starts a capture)                                                                                                                            |
+| `gpu_probe.h`                      | One X isolated D3D12 capability queries and checked small compute dispatch                                                                                                                            |
 | `catalog_trust.h`                  | Catalogue signature types used by the UWP downloader                                                                                                                                                  |
 | `ort_raii.h`                       | RAII `unique_ptr` for `Oga*` types (ORT GenAI C API, UWP path)                                                                                                                                        |
 | `llama_raii.h`                     | RAII `unique_ptr` for `llama_*` types (llama.cpp, Linux + UWP)                                                                                                                                        |
@@ -851,6 +852,7 @@ not keep a second copy. Headers without a dedicated file are header-only RAII wr
 | `test_bench.cpp`                 | bench CSV (`inference.h`), `platform.h`, `benchmark_identity.h`                             |
 | `test_cancel_policy.cpp`         | `cancel_policy.h`                                                                           |
 | `test_capture_probe.cpp`         | `capture_probe.h`                                                                           |
+| `test_gpu_probe.cpp`             | `gpu_probe.h` unsupported-host GPU success rejection                                        |
 | `test_chat_history.cpp`          | `uwp/chat-history.h`                                                                        |
 | `test_chat_prompt.cpp`           | `chat_prompt.h`                                                                             |
 | `test_cli.cpp`                   | `cli.h`                                                                                     |
