@@ -4,7 +4,7 @@ name: Xbox One CPU experiment
 
 on:
   push:
-    branches: [codex/xbox-one-cpu-baseline]
+    branches: [codex/xbox-one-cpu-baseline, codex/ministral3-one-x]
   workflow_dispatch:
 
 permissions:
@@ -30,6 +30,8 @@ jobs:
           cmake --preset linux-test
           cmake --build build/linux-test -j2
           ctest --test-dir build/linux-test --output-on-failure
+      - name: Test Mac text chat client
+        run: python3 -m unittest tests/test_xbox_chat_client.py
       - name: Check catalogue and documentation coherence
         run: python3 scripts/check-coherence.py
 
@@ -61,7 +63,8 @@ jobs:
             if (@($entry).Count -ne 1) { throw 'Expected exactly one packaged catalogue' }
             $reader = [System.IO.StreamReader]::new($entry.Open())
             try { $catalogue = $reader.ReadToEnd() | ConvertFrom-Json } finally { $reader.Dispose() }
-            if (@($catalogue.models).Count -ne 1 -or $catalogue.models[0].name -ne 'gemma3-270m') {
+            $ids = @($catalogue.models.name | Sort-Object)
+            if (($ids -join ',') -ne 'gemma3-270m,ministral3-3b-instruct') {
               throw 'Package contains a model outside the experiment allowlist'
             }
             if ($archive.Entries | Where-Object { $_.FullName -match '\.gguf$|manifest\.xbox-one\.json$' }) {
@@ -81,7 +84,7 @@ jobs:
             target = 'Xbox One X (unverified until console smoke test)'
             cpu = 'AVX, no AVX2/FMA3/BMI2'
             backend = 'llamacpp, GGUF D3D12 disabled'
-            model = 'gemma3-270m'
+            models = @('gemma3-270m', 'ministral3-3b-instruct')
           } | ConvertTo-Json | Set-Content (Join-Path $dest 'build-info.json')
           $hashes = Get-ChildItem $dest -File | Sort-Object Name | ForEach-Object {
             '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name

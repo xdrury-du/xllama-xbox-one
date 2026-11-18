@@ -70,6 +70,7 @@ target_link_libraries(xllama-tests PRIVATE xllama doctest::doctest)
 target_include_directories(xllama-tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../llama.cpp/vendor)
 target_compile_definitions(xllama-tests PRIVATE
+    XBOX_ONE_CATALOGUE_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../uwp/models/manifest.xbox-one.json"
     GOLDEN_JSON_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../diffusion/golden_vectors.json"
     CLIP_TOKENIZER_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../diffusion/clip_tokenizer"
     PARITY_GOLDEN_BIN="${CMAKE_CURRENT_SOURCE_DIR}/golden/logits-smol-short.bin"

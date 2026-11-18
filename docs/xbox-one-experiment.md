@@ -29,12 +29,13 @@ not been validated on One X.
 
 ## Model policy
 
-Only Google's Gemma 3 270M instruction model is admitted in this first build.
-The GGUF is a community quantization of Google's model, rather than a new
-model lineage. Its source, filename and SHA-256 are pinned in
-[`xbox_one_profile.h`](../include/xllama/xbox_one_profile.h) and the
-[experiment catalogue](../uwp/models/manifest.xbox-one.json).
-Google's Gemma Terms apply. No weights are bundled or mirrored by this fork.
+The profile admits Google's Gemma 3 270M baseline and Mistral AI's Ministral
+3 3B Instruct 2512 text-only candidate. Source, filename and SHA-256 are pinned
+in [`xbox_one_profile.h`](../include/xllama/xbox_one_profile.h) and the
+[experiment catalogue](../uwp/models/manifest.xbox-one.json). Gemma remains the
+first-launch default. See the [Ministral integration review](ministral3-one-x.md)
+for the artifact, prompt format and validation scope. The Mac client is now
+versioned as [`scripts/xbox-chat.py`](../scripts/xbox-chat.py).
 
 The restriction concerns the model developer and disclosed base/teacher
 lineage, not contributors' ancestry. Undisclosed training details cannot be
@@ -78,8 +79,8 @@ installation failure alone is not evidence that the CPU port failed.
 
 ## Next experiments
 
-After this baseline passes, add a provenance-reviewed model with its correct
-chat template and a pinned artifact. Compare fixed prompts and generation
+After installing the Ministral update, select and download the model through
+the Mac client, validate two text turns, then switch back to Gemma. Compare fixed prompts and generation
 lengths while varying one of thread count, context size, quantization or
 kernel implementation. Report both quality and speed. The One X is not a
 Series X, so Series-console throughput cannot be transferred to this device.

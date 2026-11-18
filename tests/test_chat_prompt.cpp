@@ -446,3 +446,28 @@ TEST_CASE("render_system_prefix is the exact head of render_prompt (#169)") {
     // prefix is empty and the caller pins only the BOS.
     CHECK(chat_format_for("gemma3-270m").render_system_prefix(sys).empty());
 }
+
+// Expected strings were checked against the chat template embedded in the
+// official Q4_K_M GGUF (sha256 9ed150d4...), excluding its tokenizer-added BOS.
+TEST_CASE("Ministral 3 Instruct uses asymmetric instruction boundaries") {
+    const auto fmt = chat_format_for("ministral3-3b-instruct");
+    CHECK(fmt.kind == ChatFormatKind::Ministral3);
+    CHECK(fmt.render_prompt("Be concise.", {}, "Hello") ==
+          "[SYSTEM_PROMPT]Be concise.[/SYSTEM_PROMPT][INST]Hello[/INST]");
+    CHECK(fmt.render_prompt("SYS", {{"u1", "a1"}}, "u2") ==
+          "[SYSTEM_PROMPT]SYS[/SYSTEM_PROMPT][INST]u1[/INST]a1</s>[INST]u2[/INST]");
+    CHECK(fmt.render_prompt("", {}, "Hello") ==
+          "[SYSTEM_PROMPT][/SYSTEM_PROMPT][INST]Hello[/INST]");
+    CHECK(fmt.render_prompt("日本語", {{" café ", "réponse"}}, "x\ny") ==
+          "[SYSTEM_PROMPT]日本語[/SYSTEM_PROMPT][INST] café [/INST]réponse</s>[INST]x\ny[/INST]");
+    CHECK(fmt.bos.empty());
+    CHECK(fmt.gen_suffix.empty());
+    CHECK(fmt.stop_sequences == std::vector<std::string>{"</s>"});
+    CHECK(chat_format_for("/cache/xllama/Ministral-3-3B-Instruct-2512-Q4_K_M.gguf").kind ==
+          ChatFormatKind::Ministral3);
+    CHECK(chat_format_for("/cache/ministral3-model/other.gguf").kind == ChatFormatKind::ChatML);
+    CHECK(fmt.render_system_prefix("SYS") == "[SYSTEM_PROMPT]SYS[/SYSTEM_PROMPT]");
+    CHECK(fmt.render_delta("next", true) == "[INST]next[/INST]");
+    CHECK(fmt.render_delta("next", false) == "</s>[INST]next[/INST]");
+    check_kv_reuse_invariant(fmt);
+}
