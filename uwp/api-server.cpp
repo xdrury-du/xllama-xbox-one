@@ -1041,6 +1041,9 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
     #ifdef XLLAMA_XBOX_ONE
         if (!experiment.empty()) {
             ::xllama::apply_xbox_one_experiment(model, experiment, sp);
+            auto& hub = ::xllama::session_hub();
+            if (hub.session && ::xllama::xbox_one_experiment_requires_reload(hub.params, sp))
+                hub.reset_locked();
             if (sp.n_gpu_layers > 0 && !one_x_kernels_passed.load()) {
                 ::xllama::session_hub().reset_locked();
                 if (!one_x_gpu_kernels_ready()) {

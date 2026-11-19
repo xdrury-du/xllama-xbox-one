@@ -106,6 +106,13 @@ and stored with every request. The default sequence runs all profiles serially,
 then two additional reference and fastest usable candidate repetitions,
 optionally the best memory-targeted winner, followed by the extended manual.
 The reference and confirmation candidates alternate to expose time drift.
+Before switching profiles, the collector calls the cached GPU-selftest endpoint,
+which unloads the resident session, then performs an unmeasured exact-profile
+warm-up. This is required for package 1.7.0.7 because its shared session identity
+omits thread count, microbatch and prompt lookup. Reusing a resident session
+would otherwise retain those previous tuning values. Warm-ups always execute,
+including when other request evidence resumes from disk. A failed GPU gate
+blocks GPU candidates while still allowing the independent CPU experiments.
 Report repeated throughput as the median of individual rates. These are small
 samples, not statistical proof. Individual request records remain available.
 

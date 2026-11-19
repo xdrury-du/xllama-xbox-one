@@ -1,8 +1,12 @@
 # Copyright (c) 2026 xllama contributors
 # SPDX-License-Identifier: MIT
 import importlib.util
+import io
+import json
 from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import Mock
 
 SPEC = importlib.util.spec_from_file_location("campaign", Path(__file__).parents[1] / "scripts/xbox-campaign.py")
 CAMPAIGN = importlib.util.module_from_spec(SPEC)
@@ -61,6 +65,24 @@ class VerdictTests(unittest.TestCase):
         self.assertTrue(CAMPAIGN.quality_passed(CAMPAIGN.stress_checks(record)))
         record["finish_reason"] = "length"
         self.assertFalse(CAMPAIGN.quality_passed(CAMPAIGN.stress_checks(record)))
+
+    def test_profile_switch_unloads_before_warmup_and_blocks_failed_gpu_gate(self):
+        with tempfile.TemporaryDirectory() as directory:
+            campaign = CAMPAIGN.Campaign("127.0.0.1", Path(directory))
+            campaign.opener = Mock()
+            campaign.opener.open.return_value = io.BytesIO(json.dumps({"passed":False}).encode())
+            campaign.run = Mock(return_value={"error":None})
+            campaign.activate("threads-2", "long-01")
+            self.assertEqual(campaign.active_profile, "threads-2")
+            request = campaign.opener.open.call_args.args[0]
+            self.assertTrue(request.full_url.endswith("/v1/diagnostics/gpu-selftest"))
+            self.assertTrue(campaign.run.call_args.kwargs["preparing"])
+            campaign.opener.open.return_value = io.BytesIO(json.dumps({"passed":False}).encode())
+            campaign.run.reset_mock()
+            with self.assertRaisesRegex(RuntimeError, "offload not admitted"):
+                campaign.activate("gpu-8", "long-01")
+            campaign.run.assert_not_called()
+            self.assertEqual(campaign.active_profile, "threads-2")
 
 
 if __name__ == "__main__":

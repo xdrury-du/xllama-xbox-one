@@ -6,6 +6,53 @@
 
 #include "ggml_d3d12_common.hlsli"
 
+#ifdef XLLAMA_SM5
+// Direct element mapping keeps the legacy-compiler path independently readable:
+// eight groups of 32 values, with adjacent groups sharing low/high nibbles.
+uint q4k_byte(uint address) {
+    return (W.Load(address & ~3u) >> (8u * (address & 3u))) & 255u;
+}
+
+[numthreads(NUM_THREADS, 1, 1)]
+void CSMain(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
+    const uint row0 = gid.x * NUM_ROWS;
+    const uint col = gid.y;
+    float4 acc = 0.0f;
+    for (uint element = tid; element < k_dim; element += NUM_THREADS) {
+        const uint block = element >> 8;
+        const uint within = element & 255u;
+        const uint group = within >> 5;
+        const uint lane = within & 31u;
+        const uint xb = col * x_stride + block * 292u;
+        const uint xa = xb + 4u + within;
+        const uint packed_x = X.Load(xa & ~3u);
+        const int activation = byte_lane(packed_x, xa & 3u);
+        const float dy = asfloat(X.Load(xb));
+        [unroll]
+        for (uint r = 0; r < NUM_ROWS; ++r) {
+            const uint row = min(row0 + r, n - 1u);
+            const uint bb = row * w_row_bytes + block * 144u;
+            const uint header = W.Load(bb);
+            const uint index = group & 3u;
+            const uint low_scale = q4k_byte(bb + 4u + index);
+            const uint low_min = q4k_byte(bb + 8u + index);
+            const uint high = q4k_byte(bb + 12u + index);
+            const uint scale = group < 4u ? low_scale & 63u :
+                (high & 15u) | ((low_scale >> 6) << 4);
+            const uint minimum = group < 4u ? low_min & 63u :
+                (high >> 4) | ((low_min >> 6) << 4);
+            const uint packed_q = q4k_byte(bb + 16u + (group >> 1) * 32u + lane);
+            const uint quant = (packed_q >> (4u * (group & 1u))) & 15u;
+            const int product = (int)(scale * quant) * activation;
+            const int offset = (int)minimum * activation;
+            acc[r] += (f16tof32(header & 65535u) * dy) * (float)product -
+                      (f16tof32(header >> 16) * dy) * (float)offset;
+        }
+    }
+    reduce_store(acc, tid, row0, col);
+}
+#else
+
 uint scale_byte(uint i, uint4 hdr) {
     uint w = (i < 4u) ? hdr.y : ((i < 8u) ? hdr.z : hdr.w);
     return (w >> ((i & 3u) * 8u)) & 0xffu;
@@ -36,11 +83,7 @@ void CSMain(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
     const uint e_lo = il * 64u + ir * 8u;
     const uint e_hi = e_lo + 32u;
 
-#ifdef XLLAMA_SM5
-    float4 acc = 0.0f;
-#else
     float acc[NUM_ROWS];
-#endif
     [unroll]
     for (uint r = 0; r < NUM_ROWS; ++r)
         acc[r] = 0.0;
@@ -74,3 +117,4 @@ void CSMain(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
     }
     reduce_store(acc, tid, row0, col);
 }
+#endif

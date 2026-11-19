@@ -3,10 +3,16 @@
 #pragma once
 
 #include "xllama/session.h"
+#include "xllama/session_spec.h"
 
 #include <string_view>
 
 namespace xllama {
+
+inline bool xbox_one_experiment_requires_reload(const SessionParams& a, const SessionParams& b) {
+    return !same_load(a, b) || a.n_threads != b.n_threads || a.n_batch != b.n_batch ||
+           a.n_ubatch != b.n_ubatch || a.prompt_lookup != b.prompt_lookup;
+}
 
 // Every candidate changes one knob from the same long-context CPU baseline.
 // Bounds are reviewed here rather than accepting arbitrary load parameters.

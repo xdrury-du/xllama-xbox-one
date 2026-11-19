@@ -140,8 +140,37 @@ class Campaign:
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
         self.results = []
         self.build_info = build_info
+        self.active_profile = None
 
-    def run(self, profile, messages, label):
+    def activate(self, profile, label):
+        """Discard resident tuning state; same_load omits several session knobs."""
+        receipt = {"profile":profile, "before_request":label,
+                   "timestamp_utc":datetime.now(timezone.utc).isoformat(),
+                   "purpose":"unload resident session and warm exact experiment profile"}
+        for attempt in range(12):
+            request = urllib.request.Request(self.base + "/v1/diagnostics/gpu-selftest",
+                data=b"{}", headers={"Content-Type":"application/json"})
+            try:
+                with self.opener.open(request, timeout=600) as response:
+                    receipt["kernel_gate"] = json.load(response)
+                break
+            except urllib.error.HTTPError as error:
+                body = error.read().decode()
+                if error.code != 503 or attempt == 11:
+                    raise RuntimeError(f"profile preparation HTTP {error.code}: {body}") from error
+                time.sleep(5)
+        directory = self.output / profile
+        directory.mkdir(exist_ok=True)
+        dump(directory / f"{label}.preparation.json", receipt)
+        if profile.startswith("gpu-") and not receipt["kernel_gate"].get("passed"):
+            raise RuntimeError("quantized GPU correctness gate failed; offload not admitted")
+        warm = self.run(profile, [{"role":"user", "content":"Reply with exactly: ORCHID"}],
+                        f"{label}.warmup", preparing=True)
+        if warm.get("error"):
+            raise RuntimeError("profile warmup failed: " + warm["error"])
+        self.active_profile = profile
+
+    def run(self, profile, messages, label, preparing=False):
         directory = self.output / profile
         directory.mkdir(exist_ok=True)
         path = directory / f"{label}.json"
@@ -149,7 +178,7 @@ class Campaign:
                    "messages": messages, "temperature": 0, "seed": 42, "stream": True}
         if path.exists():
             record = json.loads(path.read_text())
-            if record.get("done") and not record.get("error") and record.get("request") == payload and record.get("build_info") == self.build_info:
+            if not preparing and record.get("done") and not record.get("error") and record.get("request") == payload and record.get("build_info") == self.build_info:
                 return record
             previous = f"{label}.previous-{time.time_ns()}"
             path.rename(directory / f"{previous}.json")
@@ -163,6 +192,10 @@ class Campaign:
         begin = time.perf_counter()
         last_notice = begin
         try:
+            if not preparing and self.active_profile != profile:
+                self.activate(profile, label)
+                begin = time.perf_counter()
+                last_notice = begin
             for attempt in range(8):
                 request = urllib.request.Request(self.base + "/v1/chat/completions",
                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})

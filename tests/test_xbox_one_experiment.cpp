@@ -22,8 +22,17 @@ TEST_CASE("One X experiment profiles change exactly one baseline setting") {
                                     (candidate.kv_q8 != baseline.kv_q8) +
                                     (candidate.prompt_lookup != baseline.prompt_lookup);
             CHECK(differences == 1);
+            CHECK(xllama::xbox_one_experiment_requires_reload(baseline, candidate));
         }
     }
+}
+
+TEST_CASE("One X identical experiment reuses its session but batch changes reload") {
+    xllama::SessionParams params;
+    CHECK_FALSE(xllama::xbox_one_experiment_requires_reload(params, params));
+    auto candidate = params;
+    candidate.n_batch += 1;
+    CHECK(xllama::xbox_one_experiment_requires_reload(params, candidate));
 }
 
 TEST_CASE("One X experiment rejects other model ids and unknown profiles without mutation") {

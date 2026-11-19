@@ -1809,6 +1809,17 @@ D3d12SelftestRow run_case(ggml_backend_t backend, const SelftestCase& sc) {
     row.ok = row.rel_err <= kD3d12SelftestRelTol;
     if (!row.ok)
         row.error = "mismatch vs the CPU backend (q8 vec_dot)";
+    if (!row.ok && sc.n == 129 && sc.k == 3072) {
+        std::vector<float> emulated(yf.size());
+        d3d12_mmv_emulate(sc.type, q.data(), w->nb[1], xf.data(), sc.k, emulated.data(), sc.n, sc.n,
+                          sc.k, sc.ncols);
+        const double emulated_error =
+            reference_rel_err(sc.type, q, w->nb[1], xf, emulated, sc.n, sc.k, sc.ncols);
+        char detail[160];
+        std::snprintf(detail, sizeof(detail), "; host-emulation-vs-CPU relative error %.9g",
+                      emulated_error);
+        row.error += detail;
+    }
     cleanup();
     return row;
 }
