@@ -173,7 +173,7 @@ def verdict(profile, baseline, candidate, quality_ok):
 
 
 class Campaign:
-    def __init__(self, xbox, output, build_info=None):
+    def __init__(self, xbox, output, build_info=None, watchdog_seconds=0):
         self.base = f"http://{xbox}:11434"
         self.output = output
         output.mkdir(parents=True, exist_ok=True)
@@ -181,6 +181,7 @@ class Campaign:
         self.results = []
         self.build_info = build_info
         self.active_profile = None
+        self.watchdog_seconds = watchdog_seconds
 
     def activate(self, profile, label):
         """Discard resident tuning state; same_load omits several session knobs."""
@@ -227,7 +228,8 @@ class Campaign:
                 raw_previous.rename(directory / f"{previous}.sse.txt")
         record = {"profile": profile, "label": label, "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                   "request": payload, "text": "", "done": False, "error": None,
-                  "first_text_seconds": None, "usage": {}, "progress": [], "build_info": self.build_info}
+                  "first_text_seconds": None, "usage": {}, "progress": [], "build_info": self.build_info,
+                  "elapsed_watchdog_seconds":self.watchdog_seconds}
         print(f"START {profile}/{label} (reply budget omitted; EOS/context)", flush=True)
         begin = time.perf_counter()
         last_notice = begin
@@ -253,8 +255,8 @@ class Campaign:
                 for raw in response:
                     raw_stream.write(raw.decode("utf-8"))
                     now = time.perf_counter()
-                    if now - begin > 45 * 60:
-                        raise TimeoutError("45-minute request watchdog; response aborted")
+                    if self.watchdog_seconds and now - begin > self.watchdog_seconds:
+                        raise TimeoutError(f"{self.watchdog_seconds}-second configured request watchdog; response aborted")
                     line = raw.decode("utf-8").strip()
                     if not line.startswith("data:"):
                         continue
@@ -572,11 +574,15 @@ def main():
     parser.add_argument("--build-info", type=Path, required=True)
     parser.add_argument("--profiles", nargs="+", choices=list(PROFILES), default=list(PROFILES))
     parser.add_argument("--initial-only", action="store_true", help="Stop before confirmation and extended stress workloads")
+    parser.add_argument("--request-watchdog-minutes",type=int,default=0,
+                        help="Optional elapsed request limit; 0 disables it. Socket inactivity timeout remains 180 seconds.")
     args = parser.parse_args()
     if not ipaddress.IPv4Address(args.xbox).is_private:
         parser.error("Use the Xbox's private LAN address")
+    if args.request_watchdog_minutes < 0:
+        parser.error("Request watchdog must be zero or a positive number of minutes")
     build_info = json.loads(args.build_info.read_text())
-    campaign = Campaign(args.xbox, args.output, build_info)
+    campaign = Campaign(args.xbox, args.output, build_info,args.request_watchdog_minutes*60)
     source=Path(__file__).read_bytes()
     source_sha=hashlib.sha256(source).hexdigest()
     (args.output / f"collector-{source_sha[:12]}.py").write_bytes(source)
@@ -588,6 +594,7 @@ def main():
     dump(method_path, {"model": MODEL, "sha256": SHA256, "hardware": "Xbox One X (operator-declared)",
          "protocol_revision":2,
          "primary_minimum_words":1100,
+         "elapsed_request_watchdog_seconds":campaign.watchdog_seconds,
          "quality_policy":"functional checks plus no formatting regression against matched baseline; strict raw formatting also reported separately",
          "profiles": PROFILES, "reply_budget": "omitted; EOS/context", "context": 8192,
          "protocol": "docs/ministral-one-x-campaign.md", "primary_minimum_tokens": 1024,

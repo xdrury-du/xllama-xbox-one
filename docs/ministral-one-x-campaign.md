@@ -69,8 +69,13 @@ best passing candidates to check reproducibility before recommending a
 winner. A final additional workload requests at least 2048 output tokens
 from the reference and the best usable candidate to inspect long-response
 stability. A stalled, disconnected, out-of-memory or context-limited run is
-an outcome, not a completed answer. A 45-minute request watchdog may abort
-a runaway response and must be recorded as an aborted test.
+an outcome, not a completed answer. The pilot used a 45-minute elapsed guard
+and completed before it. The main collector has no elapsed request guard by
+default, because the measured pilot latency makes a much longer complete
+manual plausible. Physical context and a 180-second socket inactivity timeout
+still bound generation or detect a stalled connection. An optional
+`--request-watchdog-minutes` limit must be recorded and any abort attributed to
+that configured guard, not silently classified as a model failure.
 
 ## Verdict and reports
 
