@@ -71,13 +71,28 @@ uint xld16(uint a) {
 
 // Packed signed int8 dot products (SM 6.4). Weight lanes (nibbles 0..15, Q6_K
 // values 0..63) are valid non-negative int8.
+#ifdef XLLAMA_SM5
+// SM 5.1 has no packed dot intrinsic. Preserve its signed-byte arithmetic.
+int byte_lane(uint value, uint lane) {
+    return asint(value << (24u - 8u * lane)) >> 24;
+}
+int dot4(uint a, uint b) {
+    return byte_lane(a, 0u) * byte_lane(b, 0u) +
+           byte_lane(a, 1u) * byte_lane(b, 1u) +
+           byte_lane(a, 2u) * byte_lane(b, 2u) +
+           byte_lane(a, 3u) * byte_lane(b, 3u);
+}
+int sum4(uint b) {
+    return byte_lane(b, 0u) + byte_lane(b, 1u) + byte_lane(b, 2u) + byte_lane(b, 3u);
+}
+#else
 int dot4(uint a, uint b) {
     return dot4add_i8packed(a, b, 0);
 }
-
 int sum4(uint b) {
     return dot4add_i8packed(b, 0x01010101u, 0);
 }
+#endif
 
 // Sum each row's 64 partials and store; rows past n are skipped, never early-exit.
 void reduce_store(float acc[NUM_ROWS], uint tid, uint row0, uint col) {

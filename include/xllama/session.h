@@ -61,6 +61,8 @@ struct SessionParams {
 };
 
 struct GenerateParams {
+    // Controlled benchmarks can discard KV state without reloading weights.
+    bool clear_kv = false;
     std::string prompt;
     int n_predict = 96;
     // Shared with InferenceParams via xllama/sampling.h — see #125. The two

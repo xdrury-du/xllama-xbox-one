@@ -88,6 +88,21 @@ class XboxChatClientTests(unittest.TestCase):
         self.assertIsNone(record["error"])
         self.assertEqual(record["model"], "ministral3-3b-instruct")
 
+    def test_long_and_uncapped_replies_reach_xbox(self):
+        long_request = self.chat(max_tokens=4096, xbox_experiment="baseline")
+        self.post("/chat", long_request)
+        forwarded = self.server.opener.calls[-1][1]
+        self.assertEqual(forwarded["max_tokens"], 4096)
+        self.assertEqual(forwarded["xbox_experiment"], "baseline")
+        auto_request = self.chat()
+        del auto_request["max_tokens"]
+        self.post("/chat", auto_request)
+        self.assertNotIn("max_tokens", self.server.opener.calls[-1][1])
+        for invalid in (self.chat(max_tokens=-1), self.chat(xbox_experiment="arbitrary")):
+            with self.assertRaises(urllib.error.HTTPError) as error:
+                self.post("/chat", invalid)
+            self.assertEqual(error.exception.code, 400)
+
     def test_unknown_model_and_image_content_are_rejected_before_xbox_call(self):
         for payload in [self.chat(model="unapproved"),
                         self.chat(messages=[{"role": "user", "content": [{"type": "image"}]}])]:

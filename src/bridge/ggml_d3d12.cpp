@@ -535,7 +535,7 @@ std::string format_d3d12_selftest_row(const D3d12SelftestRow& r, const char* hos
 
 } // namespace xllama
 
-    #if !defined(_WIN32) || defined(XLLAMA_XBOX_ONE)
+    #if !defined(_WIN32)
 
 namespace xllama {
 
@@ -577,13 +577,17 @@ void run_d3d12_selftest(std::vector<D3d12SelftestRow>* out) {
         #include "ggml-alloc.h"
         #include "ggml-backend-impl.h"
         #include "ggml-backend.h"
-        #include "ggml_d3d12_get_rows_q6_k_dxil.h"
-        #include "ggml_d3d12_mmv_q4_0_t128_dxil.h"
-        #include "ggml_d3d12_mmv_q4_0_t64_dxil.h"
-        #include "ggml_d3d12_mmv_q4_k_t128_dxil.h"
-        #include "ggml_d3d12_mmv_q4_k_t64_dxil.h"
-        #include "ggml_d3d12_mmv_q6_k_t128_dxil.h"
-        #include "ggml_d3d12_mmv_q6_k_t64_dxil.h"
+        #ifdef XLLAMA_XBOX_ONE
+            #include "xbox_one_inference_dxbc.h"
+        #else
+            #include "ggml_d3d12_get_rows_q6_k_dxil.h"
+            #include "ggml_d3d12_mmv_q4_0_t128_dxil.h"
+            #include "ggml_d3d12_mmv_q4_0_t64_dxil.h"
+            #include "ggml_d3d12_mmv_q4_k_t128_dxil.h"
+            #include "ggml_d3d12_mmv_q4_k_t64_dxil.h"
+            #include "ggml_d3d12_mmv_q6_k_t128_dxil.h"
+            #include "ggml_d3d12_mmv_q6_k_t64_dxil.h"
+        #endif
         #include "xllama/d3d12_dyn.h"
         #include "xllama/path_utils.h"
         #include "xllama/platform.h"
@@ -1923,6 +1927,10 @@ void run_d3d12_selftest(std::vector<D3d12SelftestRow>* out) {
     };
     for (const auto& sc : cases)
         out->push_back(run_case(backend, sc));
+    for (auto type : {GGML_TYPE_Q4_K, GGML_TYPE_Q6_K}) {
+        out->push_back(run_case(backend, {type, ggml_type_name(type), 129, 3072, 1}));
+        out->push_back(run_case(backend, {type, ggml_type_name(type), 129, 3072, 7}));
+    }
     out->push_back(run_get_rows_case(backend, 151936, 2048)); // Coder-3B tied token_embd
     out->push_back(run_get_rows_case(backend, 65536, 1024));  // LFM2.5-350M
     ggml_backend_free(backend);

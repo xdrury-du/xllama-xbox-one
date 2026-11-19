@@ -91,6 +91,30 @@ HTTP 200 reports the measured stage, capability query results and compute
 correctness, including failures. It does not enable GPU inference. See the
 [probe runbook](xbox-one-gpu-probe.md) for the success criteria and limits.
 
+### One X Ministral experiments
+
+The One X experiment build accepts `xbox_experiment` on a Ministral chat
+request. Profiles are defined in `xbox_one_experiment.h`. Every candidate
+changes one setting from the 8192-context CPU baseline. `xbox_fresh: true`
+clears resident KV before generation without reloading weights. Unsupported
+models and unknown profile ids are rejected. Explicit token budgets remain
+validated against the effective profile context.
+
+For plain One X chat, omitting both token-budget fields generates until EOS,
+a stop sequence or the remaining context boundary. It does not silently use
+the normal 512-token default. The final SSE usage event includes
+`xbox_metrics`: requested configuration, engine prefill/decode timing, observed
+20-ms-sampled peak RSS, actual KV mode and GPU dispatch counters. Configured
+GPU layers do not mean every operation runs on the GPU. Kernel timestamps
+are usable only when `gpu_time_valid` is true. Engine decode time includes
+stream callbacks. Non-streamed and tool-proposal replies retain their normal
+response schema.
+
+`POST /v1/diagnostics/gpu-selftest` unloads the resident model, runs the
+quantized backend correctness suite and returns every result row. The result
+is cached per process. A failed kernel suite blocks GPU model profiles.
+Relaunch in Game mode after an installation, which can reset App type.
+
 ### Model download (`POST /api/pull`)
 
 The request is `{"model":"<catalogue-id-or-alias>","stream":true}`; `stream` defaults to

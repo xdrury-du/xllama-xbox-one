@@ -592,6 +592,12 @@ class LlamaSession final : public Session {
         if (!ensure_ctx(&res.error_msg))
             return res;
         llama_context* ctx = m_ctx.get();
+        res.gpu_layers = m_gpu_layers;
+        res.kv_q8_active = m_kv_q8;
+        if (gp.clear_kv) {
+            llama_memory_clear(llama_get_memory(ctx), true);
+            m_kv_tokens.clear();
+        }
 
         // KV-cache reuse: a continuation turn (reuse_kv && !reset_kv) keeps the
         // existing cache and appends the delta; otherwise re-prefill the full
@@ -1298,6 +1304,13 @@ std::unique_ptr<Session> create_llama(const SessionParams& sp, std::string* err)
 
     llama_model_params mparams = llama_model_default_params();
     const int gpu_layers = apply_gguf_gpu_layers(sp.n_gpu_layers, mparams, abs_path);
+    #ifdef XLLAMA_XBOX_ONE
+    if (sp.n_gpu_layers > 0 && gpu_layers == 0) {
+        if (err)
+            *err = "requested One X GPU backend unavailable; CPU fallback rejected";
+        return nullptr;
+    }
+    #endif
 
     install_llama_log();
     llama_model* raw_model = llama_model_load_from_file(abs_path.c_str(), mparams);

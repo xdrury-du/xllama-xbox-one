@@ -2,7 +2,7 @@
 # Copyright (c) 2026 xllama contributors
 # SPDX-License-Identifier: MIT
 
-"""Loopback-only Mac chat front end for the Xbox One Gemma experiment."""
+"""Loopback-only Mac chat front end for the Xbox One model experiments."""
 
 import argparse
 import ipaddress
@@ -26,7 +26,7 @@ PAGE = r'''<!doctype html>
 *{box-sizing:border-box}body{margin:0}main{max-width:900px;margin:auto;padding:30px 24px}
 header{display:flex;align-items:center;justify-content:space-between;gap:20px}h1{font-size:26px;margin:0}p{margin:6px 0;color:#aabaaa}
 .badge{font-size:13px;color:#b5e997}.panel{background:#1b241d;border:1px solid #344437;border-radius:14px;padding:18px;margin-top:22px}
-#messages:empty:after{content:'Type on your Mac. Gemma runs on your Xbox.';color:#8d9e90;display:block;padding:35px 0;text-align:center}
+#messages:empty:after{content:'Type on your Mac. The selected model runs on your Xbox.';color:#8d9e90;display:block;padding:35px 0;text-align:center}
 .message{margin:0 0 18px}.role{font-size:12px;text-transform:uppercase;letter-spacing:.1em;color:#a8d99b}.text{white-space:pre-wrap;overflow-wrap:anywhere;margin-top:5px}
 textarea{font:inherit;background:#111912;color:inherit;border:1px solid #4b604d;border-radius:9px;width:100%;min-height:112px;padding:12px;resize:vertical}
 textarea:focus,button:focus-visible,input:focus,select:focus{outline:2px solid #9edd79;outline-offset:3px}
@@ -39,32 +39,32 @@ select{font:inherit;background:#111912;color:inherit;border:1px solid #4b604d;bo
 <main>
 <header><div><h1>Xbox · local chat</h1><p>One X · CPU · text models</p></div><button id="new" type="button">New chat</button></header>
 <p id="status" role="status">Checking Xbox connection…</p>
-<section class="panel"><div class="bar" style="margin:0 0 18px"><label for="model">Model <select id="model"><option value="gemma3-270m">Gemma 3 270M</option><option value="ministral3-3b-instruct">Ministral 3 3B Instruct</option></select></label><button id="load" type="button">Download / load model</button></div><div id="messages" role="log" aria-label="Conversation" aria-live="polite"></div>
-<form id="form"><label for="prompt">Message</label><textarea id="prompt" placeholder="Ask Gemma something…" required></textarea>
-<div class="bar"><label for="limit">Reply limit <input id="limit" type="number" min="1" max="512" value="128"> tokens</label><button id="send" class="primary" type="submit">Send to Xbox</button></div></form>
+<section class="panel"><div class="bar" style="margin:0 0 18px"><label for="model">Model <select id="model"><option value="gemma3-270m">Gemma 3 270M</option><option value="ministral3-3b-instruct">Ministral 3 3B Instruct</option></select></label><label for="experiment">Experiment <select id="experiment"><option value="baseline">CPU baseline</option><option value="gpu-1">GPU · 1 layer</option><option value="gpu-8">GPU · 8 layers</option><option value="gpu-27">GPU · all layers</option><option value="threads-4">CPU · 4 threads</option><option value="threads-2">CPU · 2 threads</option><option value="ubatch-64">CPU · microbatch 64</option><option value="ubatch-256">CPU · microbatch 256</option><option value="kv-q8">CPU · Q8 KV cache</option><option value="prompt-lookup">CPU · prompt lookup</option></select></label><button id="load" type="button">Download / load model</button></div><div id="messages" role="log" aria-label="Conversation" aria-live="polite"></div>
+<form id="form"><label for="prompt">Message</label><textarea id="prompt" placeholder="Ask the selected model something…" required></textarea>
+<div class="bar"><label for="limit">Reply budget <input id="limit" type="number" min="1" placeholder="Auto"> tokens · blank = until EOS/context</label><button id="send" class="primary" type="submit">Send to Xbox</button></div></form>
 <div id="metrics" role="status"></div><p class="hint">⌘ Enter to send · Replies stream here · Chats and request timings are saved on this Mac.</p></section>
-<p class="hint">Keep xllama open on the Xbox. Total time includes network, loading and prompt processing. Internal decode tok/s is not available through this API.</p>
+<p class="hint">Keep xllama open on the Xbox. Total time includes network, loading and prompt processing. Experiment runs return engine timings and GPU activity.</p>
 </main><script>
 const token=__TOKEN__, q=s=>document.querySelector(s);
 let history=[];
 function message(role,text){const box=document.createElement('div');box.className='message';const label=document.createElement('div');label.className='role';label.textContent=role;const body=document.createElement('div');body.className='text';body.textContent=text;box.append(label,body);q('#messages').append(box);return body;}
-function busy(on){for(const id of ['send','new','prompt','limit','model','load'])q('#'+id).disabled=on;}
+function busy(on){for(const id of ['send','new','prompt','limit','model','experiment','load'])q('#'+id).disabled=on;}
 function newChat(){history=[];q('#messages').replaceChildren();q('#metrics').textContent='New conversation';q('#prompt').focus();}
-q('#new').onclick=newChat;q('#model').onchange=newChat;
+q('#new').onclick=newChat;q('#model').onchange=newChat;q('#experiment').onchange=newChat;
 async function refreshModels(){const response=await fetch('/models');const data=await response.json();if(!response.ok)throw Error(data.error||'Model discovery failed');for(const model of data.models){const option=q('#model').querySelector('option[value="'+model.id+'"]');option.textContent=model.label+(model.installed?'':' · download required');}}
 async function readLines(response,onEvent){if(!response.ok){const value=await response.json();throw Error(value.error||'HTTP '+response.status);}const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';for(;;){const part=await reader.read();buffer+=decoder.decode(part.value||new Uint8Array(),{stream:!part.done});let end;while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);if(line.trim())onEvent(JSON.parse(line));}if(part.done)break;}}
 q('#load').onclick=async()=>{const model=q('#model').value;busy(true);q('#metrics').textContent='Contacting Xbox…';let complete=false;try{const response=await fetch('/pull',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':token},body:JSON.stringify({model})});await readLines(response,event=>{if(event.error)throw Error(event.error);q('#metrics').textContent=event.total?event.status+' · '+Math.round(event.completed/event.total*100)+'%':event.status;if(event.status==='success')complete=true;});if(!complete)throw Error('Model loading ended without success.');await refreshModels();history=[];q('#messages').replaceChildren();q('#metrics').textContent='Model loaded on Xbox. Ready to chat.';}catch(error){q('#metrics').textContent='Error: '+error.message;}finally{busy(false);}};
 q('#prompt').onkeydown=e=>{if((e.metaKey||e.ctrlKey)&&e.key==='Enter'){e.preventDefault();q('#form').requestSubmit();}};
 q('#form').onsubmit=async e=>{e.preventDefault();if(q('#send').disabled)return;const text=q('#prompt').value.trim();if(!text)return;
  const pending=[...history,{role:'user',content:text}];message('You',text);const output=message(q('#model').selectedOptions[0].textContent.replace(' · download required',''),'');busy(true);q('#prompt').value='';q('#metrics').textContent='Waiting for Xbox…';let reply='',done=false;
- try{const response=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':token},body:JSON.stringify({model:q('#model').value,messages:pending,max_tokens:Number(q('#limit').value)})});
+ try{const response=await fetch('/chat',{method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':token},body:JSON.stringify({model:q('#model').value,messages:pending,...(q('#limit').value?{max_tokens:Number(q('#limit').value)}:{}),...(q('#model').value==='ministral3-3b-instruct'?{xbox_experiment:q('#experiment').value}:{})})});
  if(!response.ok){const err=await response.json();throw Error(err.error||'HTTP '+response.status);}
  const reader=response.body.getReader(),decoder=new TextDecoder();let buffer='';
  for(;;){const part=await reader.read();buffer+=decoder.decode(part.value||new Uint8Array(),{stream:!part.done});let end;
  while((end=buffer.indexOf('\n'))>=0){const line=buffer.slice(0,end);buffer=buffer.slice(end+1);if(!line.trim())continue;const event=JSON.parse(line);
  if(event.error)throw Error(event.error);
  if(event.delta){reply+=event.delta;output.textContent=reply;q('#metrics').textContent='Generating on Xbox…';}
- if(event.done){done=true;const u=event.usage||{};q('#metrics').textContent=(u.completion_tokens??'?')+' reply tokens · '+event.total_seconds.toFixed(2)+'s total · '+(event.first_text_seconds===null?'no text':event.first_text_seconds.toFixed(2)+'s to first text')+' · '+event.finish_reason;}}
+ if(event.done){done=true;const u=event.usage||{};q('#metrics').textContent=(u.completion_tokens??'?')+' reply tokens · '+event.total_seconds.toFixed(2)+'s total · '+(event.first_text_seconds===null?'no text':event.first_text_seconds.toFixed(2)+'s to first text')+' · '+event.finish_reason;const m=event.xbox_metrics;if(m&&m.decode_ms>0)q('#metrics').textContent+=' · '+(m.decode_tokens/(m.decode_ms/1000)).toFixed(2)+' decode tok/s · '+m.gpu_dispatches+' GPU dispatches';}}
  if(part.done)break;}
  if(!done)throw Error('Xbox stream ended before completion.');history=[...pending,{role:'assistant',content:reply}];
  }catch(err){q('#metrics').textContent='Error: '+err.message;if(!reply)output.textContent='No completed reply. Your earlier conversation is preserved.';q('#prompt').value=text;}
@@ -152,9 +152,13 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("Invalid conversation message")
             if messages[-1]["role"] != "user":
                 raise ValueError("The last message must be from the user")
-            limit = incoming.get("max_tokens", 128)
-            if type(limit) is not int or not 1 <= limit <= 512:
-                raise ValueError("Reply limit must be 1–512 tokens")
+            limit = incoming.get("max_tokens")
+            if limit is not None and (type(limit) is not int or not 1 <= limit <= 2147483647):
+                raise ValueError("Reply budget must be a positive whole number or omitted")
+            experiment = incoming.get("xbox_experiment")
+            approved = {"baseline", "gpu-1", "gpu-8", "gpu-27", "threads-4", "threads-2", "ubatch-64", "ubatch-256", "kv-q8", "prompt-lookup"}
+            if experiment is not None and (not isinstance(experiment, str) or experiment not in approved or model != "ministral3-3b-instruct"):
+                raise ValueError("Invalid experiment for this model")
         except (ValueError, KeyError, TypeError, AttributeError) as error:
             self.json_response(400, {"error": str(error)})
             return
@@ -172,8 +176,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
-            payload = {"model": model, "messages": messages, "max_tokens": limit,
-                       "temperature": 0, "stream": True}
+            payload = {"model": model, "messages": messages, "temperature": 0, "stream": True}
+            if limit is not None:
+                payload["max_tokens"] = limit
+            if experiment is not None:
+                payload["xbox_experiment"] = experiment
+            record["experiment"] = experiment
             request = urllib.request.Request(self.server.base + "/v1/chat/completions",
                                              data=json.dumps(payload).encode(),
                                              headers={"Content-Type": "application/json"})
@@ -197,6 +205,8 @@ class Handler(BaseHTTPRequestHandler):
                         raise RuntimeError(str(event["error"]))
                     if event.get("usage"):
                         record["usage"] = event["usage"]
+                    if event.get("xbox_metrics"):
+                        record["xbox_metrics"] = event["xbox_metrics"]
                     for choice in event.get("choices", []):
                         delta = choice.get("delta", {}).get("content") or ""
                         if delta:
@@ -212,7 +222,7 @@ class Handler(BaseHTTPRequestHandler):
                 emit({"done": True, "usage": record["usage"],
                       "first_text_seconds": record["first_text_seconds"],
                       "total_seconds": record["total_seconds"],
-                      "finish_reason": record.get("finish_reason", "unknown")})
+                      "finish_reason": record.get("finish_reason", "unknown"), "xbox_metrics": record.get("xbox_metrics")})
         except Exception as error:
             record["error"] = str(error)
             record["total_seconds"] = time.perf_counter() - t0

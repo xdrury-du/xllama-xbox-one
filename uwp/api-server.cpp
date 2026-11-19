@@ -27,6 +27,7 @@
     #include "xllama/api_pull_policy.h"
     #include "xllama/chat_prompt.h"
     #include "xllama/compute_admission.h"
+    #include "xllama/ggml_d3d12.h"
     #include "xllama/gpu_probe.h"
     #include "xllama/http_framing.h"
     #include "xllama/model_provision.h"
@@ -44,6 +45,7 @@
     #include "xllama/tool_template.h"
     #include "xllama/tool_transcript.h"
     #include "xllama/utf8_utils.h"
+    #include "xllama/xbox_one_experiment.h"
 
     #include <algorithm>
     #include <cctype>
@@ -56,8 +58,10 @@
     #include <filesystem>
     #include <memory>
     #include <mutex>
+    #include <nlohmann/json.hpp>
     #include <stdexcept>
     #include <string>
+    #include <thread>
     #include <vector>
 
 namespace xllama::api {
@@ -66,6 +70,54 @@ namespace {
 using namespace winrt::Windows::Networking::Sockets;
 using namespace winrt::Windows::Storage::Streams;
 using namespace winrt::Windows::Data::Json;
+
+    #ifdef XLLAMA_XBOX_ONE
+// Samples current RSS, not the process-lifetime peak (which cannot reset).
+class OneXMemorySample {
+  public:
+    OneXMemorySample()
+        : peak_(::xllama::working_set_mb()), worker_([this] {
+              while (!stop_.load()) {
+                  peak_ = std::max(peak_, ::xllama::working_set_mb());
+                  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+              }
+              peak_ = std::max(peak_, ::xllama::working_set_mb());
+          }) {}
+    ~OneXMemorySample() {
+        finish();
+    }
+    size_t finish() {
+        stop_.store(true);
+        if (worker_.joinable())
+            worker_.join();
+        return peak_;
+    }
+
+  private:
+    size_t peak_;
+    std::atomic<bool> stop_{false};
+    std::thread worker_;
+};
+
+std::atomic<bool> one_x_kernels_passed{false};
+
+const std::vector<::xllama::D3d12SelftestRow>& one_x_gpu_kernel_rows() {
+    static const auto rows = [] {
+        std::vector<::xllama::D3d12SelftestRow> value;
+        ::xllama::run_d3d12_selftest(&value);
+        return value;
+    }();
+    return rows;
+}
+bool one_x_gpu_kernels_ready() {
+    const auto& rows = one_x_gpu_kernel_rows();
+    const bool passed = !rows.empty() && std::all_of(rows.begin(), rows.end(), [](const auto& row) {
+        return row.ok && row.d3d12_ran;
+    });
+    one_x_kernels_passed.store(passed);
+    return passed;
+}
+    #endif
 
 // ---------------------------------------------------------------------------
 // Shared single-slot inference state
@@ -427,6 +479,10 @@ class SseStream {
         }
     }
 
+    void set_diagnostics(JsonObject const& value) {
+        m_diagnostics = value;
+    }
+
     void finish(const wchar_t* reason, int prompt_tokens, int completion_tokens) {
         if (m_finished)
             return;
@@ -504,8 +560,11 @@ class SseStream {
         chunk.Insert(L"created", JsonValue::CreateNumberValue(static_cast<double>(time(nullptr))));
         chunk.Insert(L"model", JsonValue::CreateStringValue(winrt::to_hstring(m_model)));
         chunk.Insert(L"choices", choices);
-        if (usage != nullptr)
+        if (usage != nullptr) {
             chunk.Insert(L"usage", *usage);
+            if (m_diagnostics != nullptr)
+                chunk.Insert(L"xbox_metrics", m_diagnostics);
+        }
         send(winrt::to_string(chunk.Stringify()));
     }
 
@@ -544,6 +603,7 @@ class SseStream {
     DataWriter m_writer{nullptr};
     std::string m_model;
     std::string m_id;
+    JsonObject m_diagnostics{nullptr};
     std::string m_pending; // trailing bytes of a split UTF-8 sequence
     std::atomic<bool>* m_abort = nullptr;
     bool m_finished = false;
@@ -920,9 +980,40 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
     bool model_is_coding = false;
     int policy_n_ctx = ::xllama::kDefaultNCtx;
     int n_predict = 0;
+    #ifdef XLLAMA_XBOX_ONE
+    OneXMemorySample memory_sample;
+    std::string experiment;
+    if (root.HasKey(L"xbox_experiment")) {
+        if (root.GetNamedValue(L"xbox_experiment").ValueType() != JsonValueType::String) {
+            status = "400 Bad Request";
+            return error_json("xbox_experiment must be a string");
+        }
+        experiment = winrt::to_string(root.GetNamedString(L"xbox_experiment"));
+    }
+    bool fresh = false;
+    if (root.HasKey(L"xbox_fresh")) {
+        if (root.GetNamedValue(L"xbox_fresh").ValueType() != JsonValueType::Boolean) {
+            status = "400 Bad Request";
+            return error_json("xbox_fresh must be a boolean");
+        }
+        fresh = root.GetNamedBoolean(L"xbox_fresh");
+    }
+    const bool auto_reply =
+        !proposal && !root.HasKey(L"max_tokens") && !root.HasKey(L"max_completion_tokens");
+    #endif
     {
         std::string err;
-        const CatalogueSessionPolicy policy = catalogue_session_policy(model);
+        CatalogueSessionPolicy policy = catalogue_session_policy(model);
+    #ifdef XLLAMA_XBOX_ONE
+        if (!experiment.empty()) {
+            auto checked = ::xllama::CatalogueSessionParams(model);
+            if (!::xllama::apply_xbox_one_experiment(model, experiment, checked)) {
+                status = "400 Bad Request";
+                return error_json("unknown or inapplicable One X experiment");
+            }
+            policy.n_ctx = checked.n_ctx;
+        }
+    #endif
 
         // Embedding models must not be used for chat completion.
         if (policy.embedding) {
@@ -946,7 +1037,19 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
             return error_json(sampling_error);
         }
         // ADR 0007: the GUI's resolver, adapter included (audit F03).
-        const ::xllama::SessionParams sp = ::xllama::CatalogueSessionParams(model);
+        ::xllama::SessionParams sp = ::xllama::CatalogueSessionParams(model);
+    #ifdef XLLAMA_XBOX_ONE
+        if (!experiment.empty()) {
+            ::xllama::apply_xbox_one_experiment(model, experiment, sp);
+            if (sp.n_gpu_layers > 0 && !one_x_kernels_passed.load()) {
+                ::xllama::session_hub().reset_locked();
+                if (!one_x_gpu_kernels_ready()) {
+                    status = "500 Internal Server Error";
+                    return error_json("One X quantized GPU kernel selftest failed");
+                }
+            }
+        }
+    #endif
         session = ::xllama::session_hub().ensure_locked(model, sp, &err);
         if (!session) {
             status = "500 Internal Server Error";
@@ -972,6 +1075,11 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
     // Validated above, before the model load: the budget below needs to know how
     // much room the reply asks for.
     gp.n_predict = n_predict;
+    #ifdef XLLAMA_XBOX_ONE
+    gp.clear_kv = fresh;
+    if (auto_reply)
+        gp.n_predict = 1; // fit the prompt, then use its remaining context
+    #endif
 
     // Same budget as the chat UI, same primitive, same tokenizer: the oldest
     // messages[] entries are dropped until the prompt plus the requested reply fit
@@ -996,6 +1104,10 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
                                  " oldest message(s) to fit n_ctx " + std::to_string(policy_n_ctx) +
                                  "\n");
         gp.prompt = fit.prompt;
+    #ifdef XLLAMA_XBOX_ONE
+        if (auto_reply)
+            gp.n_predict = std::max(1, policy_n_ctx - fit.n_tokens - 1);
+    #endif
     }
     fill_sampling(root, gp);
     // Client-supplied stop: a string or an array of strings, added to the
@@ -1049,7 +1161,50 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
                 sse->write_delta(text);
         };
         try {
+    #ifdef XLLAMA_XBOX_ONE
+            ::xllama::D3d12PhaseStats gpu_stats;
+            const auto& applied = ::xllama::session_hub().params;
+            if (applied.n_gpu_layers > 0)
+                ::xllama::ggml_d3d12_take_stats(&gpu_stats);
+    #endif
             const ::xllama::InferenceResult r = session->generate(gp);
+    #ifdef XLLAMA_XBOX_ONE
+            if (applied.n_gpu_layers > 0)
+                ::xllama::ggml_d3d12_take_stats(&gpu_stats);
+            const auto gpu_memory = ::xllama::gpu_mem_info();
+            nlohmann::json measurements = {
+                {"experiment", experiment},
+                {"context", applied.n_ctx},
+                {"threads", applied.n_threads},
+                {"batch", applied.n_batch},
+                {"ubatch", applied.n_ubatch},
+                {"requested_gpu_layers", applied.n_gpu_layers},
+                {"configured_gpu_layers", r.gpu_layers},
+                {"requested_kv_q8", applied.kv_q8},
+                {"active_kv_q8", r.kv_q8_active},
+                {"prompt_lookup", applied.prompt_lookup},
+                {"drafted", r.n_drafted},
+                {"accepted", r.n_spec_accepted},
+                {"prefill_tokens", r.n_p_eval},
+                {"prefill_ms", r.t_p_eval_ms},
+                {"decode_tokens", r.n_eval},
+                {"decode_ms", r.t_eval_ms},
+                {"engine_first_token_ms", r.t_first_token_ms},
+                {"sampled_peak_working_set_mib", memory_sample.finish()},
+                {"memory_sample_interval_ms", 20},
+                {"app_memory_limit_bytes",
+                 winrt::Windows::System::MemoryManager::AppMemoryUsageLimit()},
+                {"reply_token_budget", gp.n_predict},
+                {"auto_reply_budget", auto_reply},
+                {"gpu_calls", gpu_stats.calls},
+                {"gpu_dispatches", gpu_stats.dispatches},
+                {"gpu_time_valid", gpu_stats.gpu_time_valid()},
+                {"gpu_ms", gpu_stats.gpu_ms},
+                {"gpu_memory_snapshot_available", gpu_memory.available},
+                {"gpu_memory_mib_after", gpu_memory.current_mb},
+                {"gpu_budget_mib_after", gpu_memory.budget_mb}};
+            sse->set_diagnostics(JsonObject::Parse(winrt::to_hstring(measurements.dump())));
+    #endif
             // 200 is already on the wire: only the stream can report the outcome.
             // A client that disconnected aborts the loop; the partial result is
             // still a success, and the finish write is dropped by the dead socket.
@@ -1940,6 +2095,34 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
         }
 
     #ifdef XLLAMA_XBOX_ONE
+        if (req.method == "POST" && req.path == "/v1/diagnostics/gpu-selftest") {
+            auto permit = acquire_compute_job_or_busy();
+            if (!permit) {
+                write_response(socket, ::xllama::kApiBusyStatus, error_json("busy"));
+                return;
+            }
+            auto hub_lock = acquire_hub_or_busy();
+            if (!hub_lock.owns_lock()) {
+                write_response(socket, "503 Service Unavailable", error_json("busy"));
+                return;
+            }
+            ::xllama::session_hub().reset_locked();
+            nlohmann::json report = {{"passed", one_x_gpu_kernels_ready()},
+                                     {"shader_profile", "cs_5_1"},
+                                     {"rows", nlohmann::json::array()}};
+            for (const auto& row : one_x_gpu_kernel_rows())
+                report["rows"].push_back({{"type", row.type},
+                                          {"n", row.n},
+                                          {"k", row.k},
+                                          {"columns", row.ncols},
+                                          {"correct", row.ok},
+                                          {"gpu_ran", row.d3d12_ran},
+                                          {"relative_error", row.rel_err},
+                                          {"gpu_ms", row.gpu_ms},
+                                          {"error", row.error}});
+            write_response(socket, "200 OK", report.dump());
+            return;
+        }
         if (req.method == "POST" && req.path == "/v1/diagnostics/gpu") {
             auto permit = acquire_compute_job_or_busy();
             if (!permit) {
