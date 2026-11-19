@@ -34,6 +34,18 @@ PROFILES = {
     "kv-q8": ("Quantize the KV cache", "Set only kv_q8=true. The runtime also forces flash attention, which quantized V requires. Report actual fallback state."),
     "prompt-lookup": ("Enable prompt lookup", "Set only prompt_lookup=true; use the existing draft-free speculative decoder and count drafted/accepted tokens."),
 }
+PURPOSES = {
+    "baseline":"Establish a matched long-context reference before attributing differences to an optimization.",
+    "gpu-1":"Check real model offload with limited GPU placement before scaling its memory and synchronization cost.",
+    "gpu-8":"Measure whether more offloaded layers amortize CPU/GPU handoff overhead.",
+    "gpu-27":"Test the largest supported placement request; unsupported operations still run on CPU.",
+    "threads-4":"Test whether a smaller worker pool reduces contention or synchronization overhead.",
+    "threads-2":"Test the lower-parallelism end of the CPU thread tradeoff.",
+    "ubatch-64":"Reduce transient prefill work units to test scratch-memory and cache-pressure effects.",
+    "ubatch-256":"Give prefill more work per physical batch, measuring any latency benefit and memory cost.",
+    "kv-q8":"Reduce persistent KV storage, checking that quantization overhead and quality remain acceptable.",
+    "prompt-lookup":"Test draft-free reuse of token sequences without downloading or running a second model.",
+}
 HEADINGS = ["Choosing containers", "Drainage", "Growing medium", "Sunlight", "Choosing crops",
             "Planting", "Watering", "Feeding", "Pest prevention", "Weather protection", "Harvesting", "Seasonal cleanup"]
 LONG_PROMPT = ("Write a complete practical field guide for a beginner growing vegetables in containers. "
@@ -106,8 +118,10 @@ def aggregate(runs):
 def verdict(profile, baseline, candidate, quality_ok):
     if profile == "baseline":
         return False, "reference"
-    if candidate.get("error") or not quality_ok:
-        return False, "failed or quality gate not met"
+    if candidate.get("error"):
+        return False, "execution failed; improvement not demonstrated"
+    if not quality_ok:
+        return False, "strict quality gate not met; timing is diagnostic only"
     if baseline.get("error"):
         return False, "reference failed; no improvement conclusion"
     a, b = baseline.get("xbox_metrics", {}), candidate.get("xbox_metrics", {})
@@ -196,6 +210,7 @@ class Campaign:
                 self.activate(profile, label)
                 begin = time.perf_counter()
                 last_notice = begin
+            record["request_started_utc"] = datetime.now(timezone.utc).isoformat()
             for attempt in range(8):
                 request = urllib.request.Request(self.base + "/v1/chat/completions",
                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
@@ -303,9 +318,11 @@ class Campaign:
         long_checks = quality_checks(long_run.get("text", ""), long_run.get("usage", {}).get("completion_tokens", 0))
         good = len(checks) == 6 and all(item["passed"] for item in checks) and quality_passed(long_checks) and long_run.get("finish_reason") == "stop"
         reference = self.results[0]["long_run"] if self.results else long_run
-        reference_good = self.results[0]["quality_passed"] if self.results else good
+        reference_good = (quality_passed(self.results[0]["long_checks"]) and
+                          self.results[0]["long_run"].get("finish_reason") == "stop") if self.results else good
         improved, status = verdict(profile, reference, long_run, good and reference_good)
         result = {"profile": profile, "changed": PROFILES[profile][0], "implementation": PROFILES[profile][1],
+                  "why":PURPOSES[profile],
                   "quality_checks": checks, "long_checks": long_checks, "quality_passed": good,
                   "long_run": long_run, "improved": improved, "status": status, "replicates": 1}
         if not long_run.get("error") and long_run.get("usage", {}).get("completion_tokens", 0) < 1024:
@@ -318,11 +335,15 @@ class Campaign:
         return result
 
     def confirm_and_stress(self):
-        passing = [result for result in self.results[1:] if result["quality_passed"]]
+        passing = [result for result in self.results[1:]
+                   if not result["long_run"].get("error") and
+                   result["long_run"].get("finish_reason") == "stop" and
+                   quality_passed(result["long_checks"])]
         def rate(result):
             m = result["long_run"].get("xbox_metrics", {})
             return m.get("decode_tokens", 0) / max(m.get("decode_ms", 0) / 1000, 1e-12)
-        # Recheck the fastest usable candidate, even if no initial improvement won.
+        # Diagnostic repeats remain useful when a short formatting check failed.
+        # Selection for repeats never weakens the strict Improved verdict.
         selected = sorted(passing, key=rate, reverse=True)[:1]
         memory_winners = [result for result in passing if result["improved"] and result not in selected and result["profile"] in ("kv-q8", "ubatch-64")]
         if memory_winners:
@@ -344,7 +365,7 @@ class Campaign:
                 for item in self.results:
                     comparison = item.get("comparison_statistics", item["long_run"])
                     reference = self.results[0].get("comparison_statistics", self.results[0]["long_run"])
-                    good = item["quality_passed"] and item.get("repeat_quality_passed", True) and self.results[0]["quality_passed"] and self.results[0].get("repeat_quality_passed", True)
+                    good = item["quality_passed"] and item.get("repeat_quality_passed", True) and quality_passed(self.results[0]["long_checks"]) and self.results[0].get("repeat_quality_passed", True)
                     item["improved"], item["status"] = verdict(item["profile"], reference, comparison, good)
                     if item.get("replicates", 1) >= 3:
                         item["status"] = item["status"].replace("exploratory until repeated", "median of three runs; small sample").replace("exploratory", "median of three runs; small sample")
@@ -379,15 +400,23 @@ def render(output, results):
         m = item.get("comparison_statistics", run).get("xbox_metrics", {})
         rate = m.get("decode_tokens", 0) / (m["decode_ms"] / 1000) if m.get("decode_ms", 0) > 0 else None
         return [rate, m.get("sampled_peak_working_set_mib"), m.get("decode_tokens"),
-                m.get("prefill_ms"), run.get("first_text_seconds"), m.get("gpu_dispatches", 0)]
+                m.get("prefill_ms"), run.get("first_text_seconds"), m.get("gpu_dispatches")]
     for result in results:
         profile = result["profile"]
         directory = output / profile
         directory.mkdir(exist_ok=True)
         a, b = metrics(baseline), metrics(result)
-        fig, axes = plt.subplots(1, 3, figsize=(14, 4), constrained_layout=True)
+        speed_change = (b[0] / a[0] - 1) * 100 if a[0] and b[0] is not None else None
+        memory_change = (b[1] / a[1] - 1) * 100 if a[1] and b[1] is not None else None
+        initial_metrics=result["long_run"].get("xbox_metrics",{})
+        callback_ms=initial_metrics.get("sse_callback_ms")
+        callback_share=(callback_ms / initial_metrics["decode_ms"] * 100
+                        if callback_ms is not None and initial_metrics.get("decode_ms",0)>0 else None)
+        fig, panel = plt.subplots(2, 2, figsize=(13, 8), constrained_layout=True)
+        axes = panel.flatten()
         for axis, index, title in [(axes[0], 0, "Engine decode (tokens/s; higher is better)"),
-                                    (axes[1], 1, "Observed peak RSS (MiB; lower is better)")]:
+                                    (axes[1], 3, "Prefill (ms; lower is better)"),
+                                    (axes[2], 1, "Observed peak RSS (MiB; lower is better)")]:
             values = [a[index], b[index]]
             positions = [i for i, value in enumerate(values) if value is not None]
             bars = axis.bar(positions, [values[i] for i in positions], color=["#6d7782" if i == 0 else "#2675b9" for i in positions])
@@ -402,10 +431,10 @@ def render(output, results):
         for item, label, color in [(baseline, "CPU reference", "#6d7782"), (result, profile, "#2675b9")]:
             points = item["long_run"].get("progress", [])
             if points:
-                axes[2].plot([x[0] for x in points], [x[1] for x in points], label=label, color=color)
-        axes[2].set(xlabel="Request elapsed (seconds)", ylabel="Received characters", title="Long-response progress")
-        if axes[2].lines:
-            axes[2].legend(fontsize=8)
+                axes[3].plot([x[0] for x in points], [x[1] for x in points], label=label, color=color)
+        axes[3].set(xlabel="Request elapsed (seconds)", ylabel="Received characters", title="Initial long-response progress")
+        if axes[3].lines:
+            axes[3].legend(fontsize=8)
         count = result["replicates"]
         description = "exploratory single run" if count == 1 else f"median of {count} runs; small sample"
         fig.suptitle(f"{profile} | Improved: {str(result['improved']).lower()} | {description}")
@@ -414,11 +443,17 @@ def render(output, results):
         fig.savefig(directory / "comparison.svg")
         plt.close(fig)
         fields = {"Changed": result["changed"], "How implemented": result["implementation"],
+                  "Why test this":result.get("why",PURPOSES[profile]),
                   "Improved": str(result["improved"]).lower(), "Status": result["status"],
                   "Output tokens": b[2], "Finish reason": result["long_run"].get("finish_reason"),
                   "Engine decode tokens/s": round(b[0], 3) if b[0] is not None else "Not measured", "Prefill ms": b[3],
+                  "Decode change versus reference percent": round(speed_change, 2) if speed_change is not None else "Not measured",
+                  "Observed RSS change versus reference percent": round(memory_change, 2) if memory_change is not None else "Not measured",
+                  "Initial token callback ms": callback_ms if callback_ms is not None else "Not measured by this app build",
+                  "Initial callback share of decode-loop percent": round(callback_share,2) if callback_share is not None else "Not measured",
                   "First received text seconds": b[4], "Observed peak RSS MiB": b[1],
                   "GPU dispatches": b[5], "Quality gates passed": result["quality_passed"],
+                  "Process memory limit MiB": result["long_run"].get("xbox_metrics",{}).get("app_memory_limit_bytes",0) / (1024 * 1024) or "Not measured",
                   "Error": result["long_run"].get("error"), "Repeat count": count,
                   "Statistics": "Independent medians for throughput, RSS, tokens and prefill when repeated. First-text and progress curve show the initial run.",
                   "Initial total request seconds": result["long_run"].get("total_seconds"), "Initial engine decode ms": result["long_run"].get("xbox_metrics",{}).get("decode_ms"), "Initial engine settings": result["long_run"].get("xbox_metrics",{})}
@@ -439,9 +474,15 @@ def render(output, results):
         if result.get("length_followup"):
             followup = result["length_followup"]
             extra += "<h2>Length follow-up, separate workload</h2><p>The primary response missed 1024 output tokens. This follow-up preserves that initial failure and does not replace its comparison.</p><pre>" + html.escape(json.dumps({"checks":result["length_followup_checks"], "metrics":followup.get("xbox_metrics", {}), "error":followup.get("error")}, indent=2)) + "</pre><pre>" + html.escape(followup.get("text", "")) + "</pre>"
-        document = f"<!doctype html><meta charset='utf-8'><title>{profile} experiment</title><style>body{{font:16px system-ui;max-width:1200px;margin:30px auto;padding:0 20px}}table{{border-collapse:collapse;width:100%}}td,th{{text-align:left;padding:9px;border-bottom:1px solid #ccc}}th{{width:28%}}img{{width:100%}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}</style><h1>{profile}</h1><p>Xbox One X, Ministral 3 3B Q4_K_M. Context 8192. Reply budget omitted. Synthetic workload. One run is exploratory. Repeated bars are independent medians, not a single raw request.</p>{body}<img alt='Throughput, memory and initial output progress comparison' src='data:image/png;base64,{image_data}'><h2>Quality checks</h2><pre>{checks}</pre><h2>Initial full response</h2><pre>{answer}</pre>{extra}"
+        document = f"<!doctype html><meta charset='utf-8'><title>{profile} experiment</title><style>body{{font:16px system-ui;max-width:1200px;margin:30px auto;padding:0 20px}}table{{border-collapse:collapse;width:100%}}td,th{{text-align:left;padding:9px;border-bottom:1px solid #ccc}}th{{width:28%}}img{{width:100%}}pre{{white-space:pre-wrap;overflow-wrap:anywhere}}</style><h1>{profile}</h1><p>Xbox One X, Ministral 3 3B Q4_K_M. Context 8192. Reply budget omitted. Fixed prompt workload measured on Xbox. Model warm; KV cleared before every request. Loading costs are retained in the warmup JSON files. One run is exploratory. Repeated bars are independent medians, not a single raw request.</p>{body}<img alt='Throughput, prefill, memory and initial output progress comparison' src='data:image/png;base64,{image_data}'><h2>Quality checks</h2><pre>{checks}</pre><h2>Initial full response</h2><pre>{answer}</pre>{extra}"
         (directory / "report.html").write_text(document)
-        rows.append({"profile": profile, "decode_tokens_s": round(b[0], 3) if b[0] is not None else None, "output_tokens": b[2],
+        rows.append({"profile": profile, "change": result["changed"], "implementation": result["implementation"],
+                     "why":result.get("why",PURPOSES[profile]),
+                     "decode_tokens_s": round(b[0], 3) if b[0] is not None else None,
+                     "decode_change_percent":round(speed_change,2) if speed_change is not None else None,
+                     "rss_change_percent":round(memory_change,2) if memory_change is not None else None,
+                     "output_tokens": b[2], "prefill_ms":b[3], "initial_first_text_seconds":b[4], "replicates":count,
+                     "initial_callback_ms":callback_ms,"initial_callback_share_percent":round(callback_share,2) if callback_share is not None else None,
                      "peak_rss_mib": b[1], "gpu_dispatches": b[5], "quality_passed": result["quality_passed"],
                      "improved": result["improved"], "status": result["status"]})
     fig, axes = plt.subplots(2, 1, figsize=(12, 8), constrained_layout=True)
@@ -466,7 +507,12 @@ def render(output, results):
         writer.writeheader()
         writer.writerows(rows)
     links = "".join(f"<li><a href='{row['profile']}/report.html'>{row['profile']}: Improved {str(row['improved']).lower()} — {html.escape(row['status'])}</a></li>" for row in rows)
-    (output / "index.html").write_text(f"<!doctype html><meta charset='utf-8'><title>Ministral One X experiments</title><h1>Ministral One X experiments</h1><p>Serial, one-variable tests. Open each report for its table, graph, full response and checks. False includes improvement not demonstrated.</p><img style='max-width:100%' alt='All measured profiles throughput and memory' src='overview.png'><ul>{links}</ul>")
+    columns=["profile","change","decode_tokens_s","decode_change_percent","output_tokens","peak_rss_mib","quality_passed","improved","status"]
+    table="<table><tr>"+"".join("<th>"+html.escape(key.replace("_"," "))+"</th>" for key in columns)+"</tr>"
+    for row in rows:
+        table+="<tr>"+"".join("<td>"+html.escape(str(row[key]).lower() if isinstance(row[key],bool) else str(row[key]) if row[key] is not None else "Not measured")+"</td>" for key in columns)+"</tr>"
+    table+="</table>"
+    (output / "index.html").write_text(f"<!doctype html><meta charset='utf-8'><title>Ministral One X experiments</title><style>body{{font:16px system-ui;margin:30px}}table{{border-collapse:collapse}}td,th{{padding:8px;border:1px solid #ccc;text-align:left}}</style><h1>Ministral One X experiments</h1><p>Serial, one-variable tests. Open each report for its table, graph, full response and checks. False includes improvement not demonstrated.</p>{table}<img style='max-width:100%' alt='All measured profiles throughput and memory' src='overview.png'><ul>{links}</ul>")
     dump(output / "summary.json", rows)
 
 
@@ -486,6 +532,8 @@ def main():
          "profiles": PROFILES, "reply_budget": "omitted; EOS/context", "context": 8192,
          "protocol": "docs/ministral-one-x-campaign.md", "primary_minimum_tokens": 1024,
          "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+         "profile_isolation":"unload via cached GPU gate, then fresh exact-profile warmup; preparation excluded from measured request timing",
+         "memory_sampling_interval_ms":20,
          "build_info": build_info})
     profiles = ["baseline"] + [x for x in args.profiles if x != "baseline"]
     for profile in profiles:

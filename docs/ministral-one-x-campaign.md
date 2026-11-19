@@ -16,6 +16,10 @@ request time are separate measurements. Engine decode includes stream
 callbacks. Memory is the maximum observed working set sampled every 20 ms
 during the request, including model reload when it occurs, not an exact
 allocation peak or an additional VRAM allowance.
+New builds also measure cumulative token-callback duration, including stop
+filtering and SSE writes. This is a subset of decode-loop time, not an isolated
+network round-trip measurement or a pure model-evaluation timer. Callback call
+counts are not assumed to equal generated-token counts.
 
 | Profile       | Change from baseline            | Purpose                                              |
 | ------------- | ------------------------------- | ---------------------------------------------------- |
@@ -105,6 +109,9 @@ with Python 3.9 or newer and matplotlib available. The build receipt is required
 and stored with every request. The default sequence runs all profiles serially,
 then two additional reference and fastest usable candidate repetitions,
 optionally the best memory-targeted winner, followed by the extended manual.
+If no candidate passes every short check, a candidate with a successful primary
+long response can still be selected for diagnostic repetition and stress.
+This does not weaken the strict quality gate or make it a recommendation.
 The reference and confirmation candidates alternate to expose time drift.
 Before switching profiles, the collector calls the cached GPU-selftest endpoint,
 which unloads the resident session, then performs an unmeasured exact-profile

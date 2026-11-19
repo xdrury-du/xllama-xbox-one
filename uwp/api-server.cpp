@@ -1163,6 +1163,19 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
             if (!text.empty())
                 sse->write_delta(text);
         };
+    #ifdef XLLAMA_XBOX_ONE
+        double sse_callback_ms = 0.0;
+        uint64_t sse_callback_calls = 0;
+        const auto send_token = gp.on_token;
+        gp.on_token = [send_token, &sse_callback_ms, &sse_callback_calls](std::string_view piece) {
+            const auto begin = std::chrono::steady_clock::now();
+            send_token(piece);
+            sse_callback_ms +=
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
+                    .count();
+            ++sse_callback_calls;
+        };
+    #endif
         try {
     #ifdef XLLAMA_XBOX_ONE
             ::xllama::D3d12PhaseStats gpu_stats;
@@ -1192,6 +1205,8 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
                 {"prefill_ms", r.t_p_eval_ms},
                 {"decode_tokens", r.n_eval},
                 {"decode_ms", r.t_eval_ms},
+                {"sse_callback_ms", sse_callback_ms},
+                {"sse_callback_calls", sse_callback_calls},
                 {"engine_first_token_ms", r.t_first_token_ms},
                 {"sampled_peak_working_set_mib", memory_sample.finish()},
                 {"memory_sample_interval_ms", 20},
