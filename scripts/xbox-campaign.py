@@ -66,6 +66,30 @@ def dump(path, value):
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n")
 
 
+def terminal_marker(text, expected):
+    lines = text.rstrip().splitlines()
+    return bool(lines) and lines[-1].strip().strip("*_").strip() == expected
+
+
+def structured_checks(text):
+    source = text.strip()
+    bare = source
+    lines = source.splitlines()
+    fenced = len(lines) >= 3 and lines[0].lower() in ("```json", "```") and lines[-1] == "```"
+    if fenced:
+        bare = "\n".join(lines[1:-1])
+    try:
+        value = json.loads(bare)
+        functional = value == {"status":"ok", "count":3} and type(value["count"]) is int
+    except (ValueError, TypeError, KeyError):
+        functional = False
+    return functional, functional and not fenced
+
+
+def preserves_format(reference, candidate):
+    return all(not required or candidate.get(key, False) for key, required in reference.items())
+
+
 def quality_checks(text, tokens):
     words = text.split()
     lowered = text.lower()
@@ -73,9 +97,10 @@ def quality_checks(text, tokens):
     grams = [tuple(words[i:i + 6]) for i in range(max(0, len(words) - 5))]
     repeated = 1 - len(set(grams)) / len(grams) if grams else 0
     return {"at_least_1024_output_tokens": tokens >= 1024,
-            "at_least_700_words": len(words) >= 700,
+            "at_least_1100_words": len(words) >= 1100,
             "all_twelve_headings": covered == 12,
-            "final_marker": text.rstrip().endswith("END OF GUIDE"),
+            "final_marker": terminal_marker(text, "END OF GUIDE"),
+            "format_checks":{"exact_final_marker": text.rstrip().splitlines()[-1] == "END OF GUIDE" if text.strip() else False},
             "limited_six_word_repetition": repeated < 0.35,
             "word_count": len(words), "headings_present": covered,
             "repeated_six_gram_fraction": repeated}
@@ -90,7 +115,8 @@ def stress_checks(record):
     numbered = {int(value) for value in re.findall(r"(?m)^\s*(?:#{1,4}\s*)?(?:\*\*)?(\d{1,2})[.)]\s", text)}
     return {"at_least_2048_output_tokens": record.get("usage", {}).get("completion_tokens", 0) >= 2048,
             "all_24_sections": set(range(1, 25)) <= numbered,
-            "final_marker": text.rstrip().endswith("END OF MANUAL"),
+            "final_marker": terminal_marker(text, "END OF MANUAL"),
+            "format_checks":{"exact_final_marker": text.rstrip().splitlines()[-1] == "END OF MANUAL" if text.strip() else False},
             "natural_stop": record.get("finish_reason") == "stop",
             "no_execution_error": not record.get("error"), "word_count": len(text.split())}
 
@@ -121,7 +147,7 @@ def verdict(profile, baseline, candidate, quality_ok):
     if candidate.get("error"):
         return False, "execution failed; improvement not demonstrated"
     if not quality_ok:
-        return False, "strict quality gate not met; timing is diagnostic only"
+        return False, "functional or baseline-format gate not met; timing is diagnostic only"
     if baseline.get("error"):
         return False, "reference failed; no improvement conclusion"
     a, b = baseline.get("xbox_metrics", {}), candidate.get("xbox_metrics", {})
@@ -284,11 +310,10 @@ class Campaign:
                 break
         if not any(item.get("error") for item in checks):
             structured = self.run(profile, [{"role":"user", "content":"Return only valid JSON with exactly these fields: status is the string ok; count is the integer 3."}], "structured")
-            try:
-                correct_json = json.loads(structured["text"]) == {"status":"ok", "count":3}
-            except (ValueError, TypeError):
-                correct_json = False
-            checks.append({"test":"structured", "passed":correct_json and not structured["error"], "actual":structured["text"], "error":structured["error"]})
+            correct_json, bare_json = structured_checks(structured["text"])
+            checks.append({"test":"structured", "passed":correct_json and not structured["error"],
+                           "format_passed":bare_json and not structured["error"],
+                           "actual":structured["text"], "error":structured["error"]})
             code = self.run(profile, [{"role":"user", "content":"Write only a Python function named square with one argument x that returns x*x. No explanation."}], "code")
             try:
                 source = code["text"].strip()
@@ -316,15 +341,26 @@ class Campaign:
         else:
             long_run = self.run(profile, [{"role": "user", "content": LONG_PROMPT}], "long-01")
         long_checks = quality_checks(long_run.get("text", ""), long_run.get("usage", {}).get("completion_tokens", 0))
-        good = len(checks) == 6 and all(item["passed"] for item in checks) and quality_passed(long_checks) and long_run.get("finish_reason") == "stop"
+        functional_good = len(checks) == 6 and all(item["passed"] for item in checks) and quality_passed(long_checks) and long_run.get("finish_reason") == "stop"
+        formats = {"bare_json":next((item.get("format_passed",False) for item in checks if item["test"] == "structured"),False),
+                   "exact_final_marker":long_checks["format_checks"]["exact_final_marker"]}
+        reference_formats = self.results[0].get("format_checks", {}) if self.results else formats
+        format_preserved = preserves_format(reference_formats, formats)
+        good = functional_good and format_preserved
         reference = self.results[0]["long_run"] if self.results else long_run
         reference_good = (quality_passed(self.results[0]["long_checks"]) and
                           self.results[0]["long_run"].get("finish_reason") == "stop") if self.results else good
         improved, status = verdict(profile, reference, long_run, good and reference_good)
         result = {"profile": profile, "changed": PROFILES[profile][0], "implementation": PROFILES[profile][1],
                   "why":PURPOSES[profile],
+                  "protocol_revision":2, "functional_quality_passed":functional_good,
+                  "format_checks":formats, "strict_format_passed":all(formats.values()),
+                  "baseline_format_preserved":format_preserved,
                   "quality_checks": checks, "long_checks": long_checks, "quality_passed": good,
                   "long_run": long_run, "improved": improved, "status": status, "replicates": 1}
+        result["same_output_as_reference"] = (
+            long_run.get("text") == reference.get("text")
+            if not long_run.get("error") and not reference.get("error") else None)
         if not long_run.get("error") and long_run.get("usage", {}).get("completion_tokens", 0) < 1024:
             followup = self.run(profile, [{"role":"user", "content":STRESS_PROMPT}], "length-followup")
             result["length_followup"] = followup
@@ -358,9 +394,11 @@ class Campaign:
                 result["repetition_runs"].append(record)
                 result["replicates"] = len(result["repetition_runs"])
                 result["comparison_statistics"] = aggregate(result["repetition_runs"])
+                exact_marker_required = self.results[0].get("format_checks",{}).get("exact_final_marker", False)
                 result["repeat_quality_passed"] = all(
                     not run.get("error") and run.get("finish_reason") == "stop" and
-                    quality_passed(quality_checks(run.get("text", ""), run.get("usage", {}).get("completion_tokens", 0)))
+                    quality_passed(quality_checks(run.get("text", ""), run.get("usage", {}).get("completion_tokens", 0))) and
+                    (not exact_marker_required or run.get("text","").rstrip().splitlines()[-1] == "END OF GUIDE")
                     for run in result["repetition_runs"])
                 for item in self.results:
                     comparison = item.get("comparison_statistics", item["long_run"])
@@ -375,7 +413,8 @@ class Campaign:
             record = self.run(result["profile"], [{"role": "user", "content": STRESS_PROMPT}], "stress-01")
             result["stress_run"] = record
             result["stress_checks"] = stress_checks(record)
-            if not quality_passed(result["stress_checks"]):
+            reference_stress = self.results[0].get("stress_checks",{}).get("format_checks",{})
+            if not quality_passed(result["stress_checks"]) or not preserves_format(reference_stress, result["stress_checks"]["format_checks"]):
                 result["improved"] = False
                 result["status"] += "; extended stress gate failed"
             dump(self.output / result["profile"] / "result.json", result)
@@ -417,18 +456,22 @@ def render(output, results):
         for axis, index, title in [(axes[0], 0, "Engine decode (tokens/s; higher is better)"),
                                     (axes[1], 3, "Prefill (ms; lower is better)"),
                                     (axes[2], 1, "Observed peak RSS (MiB; lower is better)")]:
-            values = [a[index], b[index]]
+            values = [a[index]] if profile == "baseline" else [a[index], b[index]]
             positions = [i for i, value in enumerate(values) if value is not None]
             bars = axis.bar(positions, [values[i] for i in positions], color=["#6d7782" if i == 0 else "#2675b9" for i in positions])
-            axis.set_xticks([0,1], ["CPU reference", profile])
-            axis.set_xlim(-0.6, 1.6)
+            labels = ["CPU reference"] if profile == "baseline" else ["CPU reference", profile]
+            axis.set_xticks(range(len(labels)), labels)
+            axis.set_xlim(-0.6, len(labels)-0.4)
             axis.set_title(title, fontsize=10)
             axis.bar_label(bars, fmt="%.2f", padding=3)
             axis.set_ylim(0, max([value for value in values if value is not None] + [1]) * 1.18)
             for i, value in enumerate(values):
                 if value is None:
                     axis.text(i, 0.05, "Not measured", ha="center", transform=axis.get_xaxis_transform())
-        for item, label, color in [(baseline, "CPU reference", "#6d7782"), (result, profile, "#2675b9")]:
+        curves = [(baseline, "CPU reference", "#6d7782")]
+        if profile != "baseline":
+            curves.append((result, profile, "#2675b9"))
+        for item, label, color in curves:
             points = item["long_run"].get("progress", [])
             if points:
                 axes[3].plot([x[0] for x in points], [x[1] for x in points], label=label, color=color)
@@ -453,6 +496,11 @@ def render(output, results):
                   "Initial callback share of decode-loop percent": round(callback_share,2) if callback_share is not None else "Not measured",
                   "First received text seconds": b[4], "Observed peak RSS MiB": b[1],
                   "GPU dispatches": b[5], "Quality gates passed": result["quality_passed"],
+                  "Protocol revision":result.get("protocol_revision",1),
+                  "Functional checks passed":result.get("functional_quality_passed","Not separated in original pilot"),
+                  "Strict formatting passed":result.get("strict_format_passed","See original checks"),
+                  "Baseline formatting preserved":result.get("baseline_format_preserved","Not separated in original pilot"),
+                  "Same initial output as reference":result.get("same_output_as_reference","Not assessed in original pilot"),
                   "Process memory limit MiB": result["long_run"].get("xbox_metrics",{}).get("app_memory_limit_bytes",0) / (1024 * 1024) or "Not measured",
                   "Error": result["long_run"].get("error"), "Repeat count": count,
                   "Statistics": "Independent medians for throughput, RSS, tokens and prefill when repeated. First-text and progress curve show the initial run.",
@@ -484,6 +532,7 @@ def render(output, results):
                      "output_tokens": b[2], "prefill_ms":b[3], "initial_first_text_seconds":b[4], "replicates":count,
                      "initial_callback_ms":callback_ms,"initial_callback_share_percent":round(callback_share,2) if callback_share is not None else None,
                      "peak_rss_mib": b[1], "gpu_dispatches": b[5], "quality_passed": result["quality_passed"],
+                     "strict_format_passed":result.get("strict_format_passed"),
                      "improved": result["improved"], "status": result["status"]})
     fig, axes = plt.subplots(2, 1, figsize=(12, 8), constrained_layout=True)
     for axis, key, title in [(axes[0], "decode_tokens_s", "Engine decode throughput (tokens/s)"),
@@ -507,7 +556,7 @@ def render(output, results):
         writer.writeheader()
         writer.writerows(rows)
     links = "".join(f"<li><a href='{row['profile']}/report.html'>{row['profile']}: Improved {str(row['improved']).lower()} — {html.escape(row['status'])}</a></li>" for row in rows)
-    columns=["profile","change","decode_tokens_s","decode_change_percent","output_tokens","peak_rss_mib","quality_passed","improved","status"]
+    columns=["profile","change","decode_tokens_s","decode_change_percent","output_tokens","peak_rss_mib","quality_passed","strict_format_passed","improved","status"]
     table="<table><tr>"+"".join("<th>"+html.escape(key.replace("_"," "))+"</th>" for key in columns)+"</tr>"
     for row in rows:
         table+="<tr>"+"".join("<td>"+html.escape(str(row[key]).lower() if isinstance(row[key],bool) else str(row[key]) if row[key] is not None else "Not measured")+"</td>" for key in columns)+"</tr>"
@@ -528,10 +577,21 @@ def main():
         parser.error("Use the Xbox's private LAN address")
     build_info = json.loads(args.build_info.read_text())
     campaign = Campaign(args.xbox, args.output, build_info)
-    dump(args.output / "method.json", {"model": MODEL, "sha256": SHA256, "hardware": "Xbox One X (operator-declared)",
+    source=Path(__file__).read_bytes()
+    source_sha=hashlib.sha256(source).hexdigest()
+    (args.output / f"collector-{source_sha[:12]}.py").write_bytes(source)
+    method_path=args.output / "method.json"
+    if method_path.exists():
+        previous=json.loads(method_path.read_text())
+        if previous.get("harness_sha256") != source_sha:
+            method_path.rename(args.output / f"method.previous-{time.time_ns()}.json")
+    dump(method_path, {"model": MODEL, "sha256": SHA256, "hardware": "Xbox One X (operator-declared)",
+         "protocol_revision":2,
+         "primary_minimum_words":1100,
+         "quality_policy":"functional checks plus no formatting regression against matched baseline; strict raw formatting also reported separately",
          "profiles": PROFILES, "reply_budget": "omitted; EOS/context", "context": 8192,
          "protocol": "docs/ministral-one-x-campaign.md", "primary_minimum_tokens": 1024,
-         "harness_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
+         "harness_sha256": source_sha,
          "profile_isolation":"unload via cached GPU gate, then fresh exact-profile warmup; preparation excluded from measured request timing",
          "memory_sampling_interval_ms":20,
          "build_info": build_info})

@@ -84,6 +84,25 @@ class VerdictTests(unittest.TestCase):
             campaign.run.assert_not_called()
             self.assertEqual(campaign.active_profile, "threads-2")
 
+    def test_functional_json_and_tracked_raw_format_are_separate(self):
+        self.assertEqual(CAMPAIGN.structured_checks('{"status":"ok","count":3}'), (True,True))
+        self.assertEqual(CAMPAIGN.structured_checks('```json\n{"status":"ok","count":3}\n```'), (True,False))
+        self.assertEqual(CAMPAIGN.structured_checks('{"status":"ok","count":3.0}'), (False,False))
+        self.assertEqual(CAMPAIGN.structured_checks('Here is JSON: {"status":"ok","count":3}'), (False,False))
+        self.assertTrue(CAMPAIGN.terminal_marker('text\n**END OF GUIDE**', 'END OF GUIDE'))
+        self.assertFalse(CAMPAIGN.terminal_marker('END OF GUIDE\nmore text', 'END OF GUIDE'))
+
+    def test_known_format_limitation_can_persist_but_new_format_regression_fails(self):
+        self.assertTrue(CAMPAIGN.preserves_format({"bare_json":False}, {"bare_json":False}))
+        self.assertTrue(CAMPAIGN.preserves_format({"bare_json":False}, {"bare_json":True}))
+        self.assertFalse(CAMPAIGN.preserves_format({"bare_json":True}, {"bare_json":False}))
+
+    def test_long_functional_gate_keeps_bold_marker_format_failure_visible(self):
+        text="\n".join(CAMPAIGN.HEADINGS)+"\n"+" ".join(f"word{i}" for i in range(1200))+"\n**END OF GUIDE**"
+        checks=CAMPAIGN.quality_checks(text,1200)
+        self.assertTrue(CAMPAIGN.quality_passed(checks))
+        self.assertFalse(checks["format_checks"]["exact_final_marker"])
+
 
 if __name__ == "__main__":
     unittest.main()

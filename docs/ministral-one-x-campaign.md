@@ -74,6 +74,29 @@ a runaway response and must be recorded as an aborted test.
 
 ## Verdict and reports
 
+### Protocol revision 2, declared after the CPU pilot and before candidates
+
+The initial pilot completed the guide but wrapped its terminal marker in bold
+Markdown and returned the requested JSON inside a code fence. Its original
+strict-format failures remain preserved. For the main campaign, assess
+functional content and tracked raw-format compliance separately. JSON may be
+unwrapped from one balanced JSON code fence before validating the exact object
+and integer type. The guide marker must be on the terminal line, allowing
+Markdown emphasis decoration. Raw JSON and an undecorated exact terminal line
+are still reported as separate format checks. A candidate must preserve every
+tracked format check that its matched baseline passes. A known baseline format
+limitation can persist, but cannot disappear from the report.
+The main functional word minimum is raised from the pilot's permissive 700
+words to the prompt's requested 1100. Reports also record whether initial
+answers match the reference text. Different output content and length can
+affect average decode throughput even with the same prompt, so those results
+remain workload observations rather than isolated kernel-speed measurements.
+
+This prospective rubric change does not change the GPU numerical tolerance,
+performance thresholds, prompts or timing method. It prevents cosmetic
+decoration from hiding a measured performance difference while retaining the
+information needed for clients that require raw machine-readable output.
+
 Each report includes the exact settings and implementation change, raw
 outputs, engine and request timing, output length, sampled RSS, actual GPU
 activity, quality checks, errors, a comparison table and standalone graphs.
@@ -81,8 +104,9 @@ Plot measured decode throughput separately from prefill/first-text latency.
 Output-progress curves use received characters, not an assumed one-token
 per SSE chunk conversion.
 
-`Improved = true` requires a successful long response, passing correctness
-checks and at least 5 percent higher measured decode throughput than the
+`Improved = true` requires a successful long response, passing functional
+correctness checks, no tracked formatting regression against the matched
+baseline and at least 5 percent higher measured decode throughput than the
 matched CPU reference. A memory-targeted Q8 KV candidate may instead pass
 with at least 10 percent less sampled working set, at most 5 percent decode
 regression and no failed quality check. Microbatch candidates may pass with
