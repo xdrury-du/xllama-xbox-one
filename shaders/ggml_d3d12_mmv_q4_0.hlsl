@@ -17,7 +17,11 @@ void CSMain(uint tid : SV_GroupIndex, uint3 gid : SV_GroupID) {
     const uint b = itid >> 1;
     const uint h = itid & 1u;
 
+#ifdef XLLAMA_SM5
+    float4 acc = 0.0f;
+#else
     float acc[NUM_ROWS];
+#endif
     [unroll]
     for (uint r = 0; r < NUM_ROWS; ++r)
         acc[r] = 0.0;

@@ -38,7 +38,13 @@ ByteAddressBuffer W : register(t0);
 RWByteAddressBuffer X : register(u1);
 RWStructuredBuffer<float> Y : register(u0);
 
+#ifdef XLLAMA_SM5
+groupshared float red[NUM_ROWS * NUM_THREADS];
+#define RED(row, thread) red[(row) * NUM_THREADS + (thread)]
+#else
 groupshared float red[NUM_ROWS][NUM_THREADS];
+#define RED(row, thread) red[row][thread]
+#endif
 
 // Q4_0 (18 B) and Q6_K (210 B) blocks sit on 2-byte boundaries. ByteAddressBuffer
 // loads need 4-byte alignment, so read the aligned dwords and shift.
@@ -109,20 +115,24 @@ int sum4(uint b) {
 #endif
 
 // Sum each row's 64 partials and store; rows past n are skipped, never early-exit.
+#ifdef XLLAMA_SM5
+void reduce_store(float4 acc, uint tid, uint row0, uint col) {
+#else
 void reduce_store(float acc[NUM_ROWS], uint tid, uint row0, uint col) {
+#endif
     [unroll]
     for (uint r = 0; r < NUM_ROWS; ++r)
-        red[r][tid] = acc[r];
+        RED(r, tid) = acc[r];
     GroupMemoryBarrierWithGroupSync();
     [unroll]
     for (uint stride = NUM_THREADS / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
             [unroll]
             for (uint r = 0; r < NUM_ROWS; ++r)
-                red[r][tid] += red[r][tid + stride];
+                RED(r, tid) += RED(r, tid + stride);
         }
         GroupMemoryBarrierWithGroupSync();
     }
     if (tid < NUM_ROWS && row0 + tid < n)
-        Y[col * y_stride + row0 + tid] = red[tid][0];
+        Y[col * y_stride + row0 + tid] = RED(tid, 0);
 }
