@@ -52,7 +52,7 @@ must report actual GPU dispatches. Other operations still execute on CPU.
 
 Run every test serially. First check short exact answers, arithmetic,
 structured extraction and conversation recall. Preserve failed answers.
-Then request a complete twelve-section guide of approximately 900 words,
+Then request a complete twelve-section guide targeting at least 1100 words,
 with all section headings and a final marker. Do not pass a reply-token
 limit. Generation ends naturally or at available context; record the finish
 reason and token count. Responses under 1024 output tokens do not satisfy
@@ -81,7 +81,10 @@ per SSE chunk conversion.
 checks and at least 5 percent higher measured decode throughput than the
 matched CPU reference. A memory-targeted Q8 KV candidate may instead pass
 with at least 10 percent less sampled working set, at most 5 percent decode
-regression and no failed quality check. Otherwise the value is false, with
+regression and no failed quality check. Microbatch candidates may pass with
+at least 10 percent faster prefill at the same prefill-token count and no
+more than 5 percent decode regression. The smaller microbatch may instead
+pass the same 10 percent memory-reduction criterion. Otherwise the value is false, with
 status distinguishing regression, failure and improvement not demonstrated.
 A single-run true value is explicitly exploratory until repeated. Basic
 checks and manual coherence review do not establish general model quality.
@@ -94,3 +97,22 @@ The Mac client exposes the reviewed profiles and accepts a blank reply
 budget. It removes the old 512-token client cap. The normal controller UI
 and its default catalogue context are separate from these API profiles.
 Keep the app foregrounded and confirm App type Game after every install.
+
+## Collector
+
+Run `scripts/xbox-campaign.py --xbox <private-IP> --output <directory> --build-info <artifact-build-info.json>`
+with Python 3.9 or newer and matplotlib available. The build receipt is required
+and stored with every request. The default sequence runs all profiles serially,
+then two additional reference and fastest usable candidate repetitions,
+optionally the best memory-targeted winner, followed by the extended manual.
+The reference and confirmation candidates alternate to expose time drift.
+Report repeated throughput as the median of individual rates. These are small
+samples, not statistical proof. Individual request records remain available.
+
+`--initial-only` stops after the exploratory sweep. `--profiles` narrows the
+candidate list but always includes the baseline. Completed requests resume only
+when the full payload and build receipt match. Replaced or failed attempts are
+preserved. Raw streams, JSON, per-profile HTML tables, PNG/SVG graphs, full
+responses and CSV/JSON summaries are written as tests finish. Missing metrics
+are shown as unmeasured. A shorter primary reply triggers a separate length
+follow-up without replacing the primary comparison or its failed length gate.

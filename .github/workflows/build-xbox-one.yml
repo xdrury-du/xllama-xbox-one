@@ -30,8 +30,8 @@ jobs:
           cmake --preset linux-test
           cmake --build build/linux-test -j2
           ctest --test-dir build/linux-test --output-on-failure
-      - name: Test Mac text chat client
-        run: python3 -m unittest tests/test_xbox_chat_client.py
+      - name: Test Mac text chat client and experiment verdicts
+        run: python3 -m unittest tests/test_xbox_chat_client.py tests/test_xbox_campaign.py
       - name: Check catalogue and documentation coherence
         run: python3 scripts/check-coherence.py
 
