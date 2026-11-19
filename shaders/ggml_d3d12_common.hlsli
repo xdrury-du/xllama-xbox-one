@@ -43,11 +43,18 @@ groupshared float red[NUM_ROWS][NUM_THREADS];
 // Q4_0 (18 B) and Q6_K (210 B) blocks sit on 2-byte boundaries. ByteAddressBuffer
 // loads need 4-byte alignment, so read the aligned dwords and shift.
 uint ld32(uint a) {
+#ifdef XLLAMA_SM5
+    // FXC cannot inline the early-return load helper inside these loops.
+    const uint2 words = W.Load2(a & ~3u);
+    return (a & 2u) != 0u ? (words.x >> 16) | (words.y << 16) : words.x;
+#else
+
     const uint b = a & ~3u;
     const uint lo = W.Load(b);
     if ((a & 3u) == 0u)
         return lo;
     return (lo >> 16) | (W.Load(b + 4u) << 16);
+#endif
 }
 
 uint ld16(uint a) {
@@ -57,11 +64,18 @@ uint ld16(uint a) {
 
 // X reads: block_q8_0 is 34 B, so q8_0 columns sit on 2-byte boundaries too.
 uint xld32(uint a) {
+#ifdef XLLAMA_SM5
+    // FXC cannot inline the early-return load helper inside these loops.
+    const uint2 words = X.Load2(a & ~3u);
+    return (a & 2u) != 0u ? (words.x >> 16) | (words.y << 16) : words.x;
+#else
+
     const uint b = a & ~3u;
     const uint lo = X.Load(b);
     if ((a & 3u) == 0u)
         return lo;
     return (lo >> 16) | (X.Load(b + 4u) << 16);
+#endif
 }
 
 uint xld16(uint a) {
