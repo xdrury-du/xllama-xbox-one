@@ -452,3 +452,17 @@ curl -s http://<ip-xbox>:11434/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"<catalogue-id>","messages":[{"role":"user","content":"Say hi"}]}'
 ```
+
+### Short One X CPU experiments
+
+The Ministral-only `xbox_experiment` values `smol-base`, `smol-guided`, `smol-row`,
+`smol-both` and `smol-profile` require an explicit reply limit from 1 through 64.
+Omitted or larger limits return HTTP 400 before model loading. They retain the
+8192-context experiment baseline and are described in
+[the short campaign protocol](ministral-one-x-campaign.md#short-kernel-campaign).
+Streamed `xbox_metrics` adds `cpu_experiment_flags`, `cpu_guided_calls`, and
+`cpu_row_calls`. The profiling-only value also returns `cpu_operation_profile`,
+with operation names, call counts, inclusive `wall_ms`, and tagged
+`output_matmul_ms`. Profiling covers prefill plus decode and may perturb timing.
+It is excluded from the speed comparison. CPU switches are scoped to generation
+and reset before the request releases its compute permit.

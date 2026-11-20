@@ -30,3 +30,16 @@ code left to patch. The CPU backend remains statically linked on UWP.
 The patch is a plain `git diff`. If it no longer applies, redo the three guards
 by hand (they are one-liners plus a small `#if` block — see the patch body) and
 regenerate with `git -C llama.cpp diff > patches/0001-uwp-appcontainer-guards.patch`.
+
+## Optional One X CPU experiments
+
+`0002-one-x-cpu-experiments.patch` adds default-off guided decode-matmul
+scheduling, column sharing for eligible single-row binary/SiLU operations,
+and per-operation wall-time diagnostics. It is applied after the AppContainer
+guards. New hooks are used only by the reviewed One X API profiles and require
+an idle CPU graph when configured, reset or read. Their flags are cleared when
+the serialized API request ends. No model weights, vocabulary or stock numerical
+formats change. `scripts/test-one-x-cpu-patch.sh` verifies the patch against an
+isolated checkout, including AVX-only host correctness. Host timings are not
+Xbox performance evidence. See the short protocol in
+[ministral-one-x-campaign.md](../docs/ministral-one-x-campaign.md).

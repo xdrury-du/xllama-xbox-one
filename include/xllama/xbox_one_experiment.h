@@ -11,7 +11,8 @@ namespace xllama {
 
 inline bool xbox_one_experiment_requires_reload(const SessionParams& a, const SessionParams& b) {
     return !same_load(a, b) || a.n_threads != b.n_threads || a.n_batch != b.n_batch ||
-           a.n_ubatch != b.n_ubatch || a.prompt_lookup != b.prompt_lookup;
+           a.n_ubatch != b.n_ubatch || a.prompt_lookup != b.prompt_lookup ||
+           a.cpu_experiment_flags != b.cpu_experiment_flags;
 }
 
 // Every candidate changes one knob from the same long-context CPU baseline.
@@ -20,7 +21,8 @@ inline bool apply_xbox_one_experiment(std::string_view model, std::string_view i
                                       SessionParams& params) {
     if (id != "baseline" && id != "gpu-1" && id != "gpu-8" && id != "gpu-27" && id != "threads-4" &&
         id != "threads-2" && id != "ubatch-64" && id != "ubatch-256" && id != "kv-q8" &&
-        id != "prompt-lookup")
+        id != "prompt-lookup" && id != "smol-base" && id != "smol-profile" && id != "smol-guided" &&
+        id != "smol-row" && id != "smol-both")
         return false;
     if (model != "ministral3-3b-instruct")
         return false;
@@ -31,6 +33,7 @@ inline bool apply_xbox_one_experiment(std::string_view model, std::string_view i
     params.n_gpu_layers = 0;
     params.kv_q8 = false;
     params.prompt_lookup = false;
+    params.cpu_experiment_flags = 0;
     if (id == "gpu-1")
         params.n_gpu_layers = 1;
     if (id == "gpu-8")
@@ -49,6 +52,14 @@ inline bool apply_xbox_one_experiment(std::string_view model, std::string_view i
         params.kv_q8 = true;
     if (id == "prompt-lookup")
         params.prompt_lookup = true;
+    if (id == "smol-profile")
+        params.cpu_experiment_flags = 1;
+    if (id == "smol-guided")
+        params.cpu_experiment_flags = 2;
+    if (id == "smol-row")
+        params.cpu_experiment_flags = 4;
+    if (id == "smol-both")
+        params.cpu_experiment_flags = 6;
     return true;
 }
 

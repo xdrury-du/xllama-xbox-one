@@ -42,3 +42,26 @@ TEST_CASE("One X experiment rejects other model ids and unknown profiles without
     CHECK_FALSE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", "arbitrary", params));
     CHECK(params.n_ctx == 1234);
 }
+
+TEST_CASE("One X short CPU profiles admit only reviewed independent flags") {
+    xllama::SessionParams baseline;
+    REQUIRE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", "smol-base", baseline));
+    CHECK(baseline.cpu_experiment_flags == 0);
+    CHECK(baseline.n_ctx == 8192);
+    for (const auto& item : {std::pair{"smol-profile", 1u},
+                             {"smol-guided", 2u},
+                             {"smol-row", 4u},
+                             {"smol-both", 6u}}) {
+        auto candidate = baseline;
+        REQUIRE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", item.first, candidate));
+        CHECK(candidate.cpu_experiment_flags == item.second);
+        CHECK(candidate.n_threads == baseline.n_threads);
+        CHECK(candidate.n_gpu_layers == baseline.n_gpu_layers);
+        CHECK(candidate.kv_q8 == baseline.kv_q8);
+        CHECK(xllama::xbox_one_experiment_requires_reload(baseline, candidate));
+    }
+    auto reset = baseline;
+    reset.cpu_experiment_flags = 7;
+    REQUIRE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", "baseline", reset));
+    CHECK(reset.cpu_experiment_flags == 0);
+}

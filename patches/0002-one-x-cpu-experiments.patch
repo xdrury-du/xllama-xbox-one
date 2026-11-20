@@ -1,0 +1,201 @@
+--- a/ggml/include/ggml-cpu.h
++++ b/ggml/include/ggml-cpu.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "ggml.h"
++#include "ggml-xllama-cpu.h"
+ #include "ggml-backend.h"
+ 
+ #ifdef  __cplusplus
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -1160,6 +1160,45 @@
+ 
+ ////////////////////////////////////////////////////////////////////////////////
+ 
++// Opt-in smolmaxxing-style experiments. Worker zero is the sole stats writer.
++static unsigned xllama_cpu_flags;
++static struct ggml_xllama_op_stat xllama_cpu_stats[GGML_OP_COUNT];
++static uint64_t xllama_guided_calls;
++static uint64_t xllama_row_calls;
++void ggml_cpu_xllama_set_flags(unsigned flags) { xllama_cpu_flags = flags & 7u; }
++unsigned ggml_cpu_xllama_flags(void) { return xllama_cpu_flags; }
++void ggml_cpu_xllama_reset_stats(void) {
++    memset(xllama_cpu_stats, 0, sizeof(xllama_cpu_stats));
++    xllama_guided_calls = xllama_row_calls = 0;
++}
++struct ggml_xllama_op_stat ggml_cpu_xllama_op_stat(int op) {
++    struct ggml_xllama_op_stat empty = {0, 0, 0};
++    return op >= 0 && op < GGML_OP_COUNT ? xllama_cpu_stats[op] : empty;
++}
++uint64_t ggml_cpu_xllama_guided_calls(void) { return xllama_guided_calls; }
++uint64_t ggml_cpu_xllama_row_calls(void) { return xllama_row_calls; }
++void ggml_cpu_xllama_note_row(void) { ++xllama_row_calls; }
++
++static bool xllama_claim_rows(struct ggml_threadpool * tp, int limit, int nth,
++                             int * begin, int * end) {
++    int start = atomic_load_explicit(&tp->current_chunk, memory_order_relaxed);
++    while (start < limit) {
++        // Shrink the tail, keeping 16-row alignment for SIMD kernels.
++        int count = MAX(16, ((limit - start) / (2 * nth) + 15) / 16 * 16);
++        int stop = MIN(start + count, limit);
++#ifdef _MSC_VER
++        int observed = (int) InterlockedCompareExchange(&tp->current_chunk, stop, start);
++        bool claimed = observed == start;
++        if (!claimed) { start = observed; }
++#else
++        bool claimed = atomic_compare_exchange_weak_explicit(&tp->current_chunk, &start, stop,
++                                                             memory_order_relaxed, memory_order_relaxed);
++#endif
++        if (claimed) { *begin = start; *end = stop; return true; }
++    }
++    return false;
++}
++
+ // ggml_compute_forward_mul_mat
+ 
+ static void ggml_compute_forward_mul_mat_one_chunk(
+@@ -1376,9 +1415,13 @@
+     #endif
+     }
+ 
++    const bool xllama_guided = (xllama_cpu_flags & GGML_XLLAMA_GUIDED) &&
++                              ne1 * ne2 * ne3 == 1 && ne0 >= 128 && ne0 <= INT_MAX &&
++                              !ggml_is_numa();
++    if (ith == 0 && xllama_guided) { ++xllama_guided_calls; }
+     if (ith == 0) {
+         // Every thread starts at ith, so the first unprocessed chunk is nth.  This save a bit of coordination right at the start.
+-        atomic_store_explicit(&params->threadpool->current_chunk, nth, memory_order_relaxed);
++        atomic_store_explicit(&params->threadpool->current_chunk, xllama_guided ? 0 : nth, memory_order_relaxed);
+     }
+ 
+     ggml_barrier(params->threadpool);
+@@ -1412,6 +1455,14 @@
+ 
+     // This is the size of the rest of the dimensions of the result
+     const int64_t nr1 = ne1 * ne2 * ne3;
++
++    if (xllama_guided) {
++        int begin, end;
++        while (xllama_claim_rows(params->threadpool, (int) nr0, nth, &begin, &end)) {
++            ggml_compute_forward_mul_mat_one_chunk(params, dst, src0->type, 1, begin, end, 0, 1);
++        }
++        return;
++    }
+ 
+     // Now select a reasonable chunk size.
+     int chunk_size = 16;
+@@ -3138,6 +3189,9 @@
+             continue;
+         }
+ 
++        const bool xllama_profile = state->ith == 0 && (xllama_cpu_flags & GGML_XLLAMA_PROFILE);
++        const int64_t xllama_start = xllama_profile ? ggml_time_us() : 0;
++
+         // TODO: move fused-op detection into ggml_graph_plan so fusion decisions are made once at planning time
+         // Try fused ops, fall back to normal compute
+         const int n_fused = ggml_cpu_try_fuse_ops(cgraph, node_n, &params, cplan);
+@@ -3153,8 +3207,17 @@
+             tp->ec    = GGML_STATUS_ABORTED;
+         }
+ 
+-        if (node_n + 1 < cgraph->n_nodes) {
++        if (node_n + 1 < cgraph->n_nodes || (xllama_cpu_flags & GGML_XLLAMA_PROFILE)) {
+             ggml_barrier(state->threadpool);
++        }
++        if (xllama_profile) {
++            const uint64_t elapsed = (uint64_t) (ggml_time_us() - xllama_start);
++            struct ggml_xllama_op_stat * stat = &xllama_cpu_stats[node->op];
++            ++stat->calls;
++            stat->wall_us += elapsed;
++            if (node->op == GGML_OP_MUL_MAT && strstr(node->name, "result_output")) {
++                stat->head_wall_us += elapsed;
++            }
+         }
+     }
+ 
+--- a/ggml/src/ggml-cpu/binary-ops.cpp
++++ b/ggml/src/ggml-cpu/binary-ops.cpp
+@@ -1,4 +1,5 @@
+ #include "binary-ops.h"
++#include "ggml-cpu.h"
+ 
+ #if defined(GGML_USE_ACCELERATE)
+ #include <Accelerate/Accelerate.h>
+@@ -57,6 +58,22 @@
+ 
+     GGML_ASSERT( nb0 == sizeof(dst_t));
+     GGML_ASSERT(nb00 == sizeof(src0_t));
++
++    if ((ggml_cpu_xllama_flags() & GGML_XLLAMA_ROW_OPS) &&
++        (op == op_add || op == op_mul) && ggml_are_same_shape(src0, src1) &&
++        src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_F32 &&
++        dst->type == GGML_TYPE_F32 && ggml_nrows(src0) == 1 && ne00 >= 1024 &&
++        ggml_is_contiguous(src0) && ggml_is_contiguous(src1) && ggml_is_contiguous(dst)) {
++        const int64_t chunk = ((ne00 + params->nth - 1) / params->nth + 31) / 32 * 32;
++        const int64_t begin = MIN(chunk * params->ith, ne00);
++        const int64_t end = MIN(begin + chunk, ne00);
++        if (params->ith == 0) { ggml_cpu_xllama_note_row(); }
++        for (int64_t i = begin; i < end; ++i) {
++            ((float *) dst->data)[i] = op(((const float *) src0->data)[i],
++                                        ((const float *) src1->data)[i % ne10]);
++        }
++        return;
++    }
+ 
+     const auto [ir0, ir1] = get_thread_range(params, src0);
+     const bool is_src1_contiguous_rows = ggml_is_contiguous_rows(src1);
+--- a/ggml/src/ggml-cpu/ops.cpp
++++ b/ggml/src/ggml-cpu/ops.cpp
+@@ -2665,6 +2665,19 @@
+ 
+     const int nc = src0->ne[0];
+     const int nr = ggml_nrows(src0);
++
++    if ((ggml_cpu_xllama_flags() & GGML_XLLAMA_ROW_OPS) && nr == 1 && nc >= 1024 &&
++        ggml_is_contiguous(src0) && ggml_is_contiguous(dst)) {
++        const int chunk = ((nc + nth - 1) / nth + 31) / 32 * 32;
++        const int begin = MIN(chunk * ith, nc);
++        const int end = MIN(begin + chunk, nc);
++        if (ith == 0) { ggml_cpu_xllama_note_row(); }
++        if (end > begin) {
++            ggml_vec_silu_f32(end - begin, (float *) dst->data + begin,
++                             (const float *) src0->data + begin);
++        }
++        return;
++    }
+ 
+     // rows per thread
+     const int dr = (nr + nth - 1)/nth;
+--- /dev/null
++++ b/ggml/include/ggml-xllama-cpu.h
+@@ -0,0 +1,28 @@
++// Copyright (c) 2026 xllama contributors
++// SPDX-License-Identifier: MIT
++#pragma once
++#include "ggml-backend.h"
++#ifdef __cplusplus
++extern "C" {
++#endif
++// Set/reset/read only while the CPU graph is idle. One process-wide session.
++enum ggml_xllama_cpu_flag {
++    GGML_XLLAMA_PROFILE = 1,
++    GGML_XLLAMA_GUIDED = 2,
++    GGML_XLLAMA_ROW_OPS = 4,
++};
++struct ggml_xllama_op_stat {
++    uint64_t calls;
++    uint64_t wall_us;
++    uint64_t head_wall_us;
++};
++GGML_BACKEND_API void ggml_cpu_xllama_set_flags(unsigned flags);
++GGML_BACKEND_API unsigned ggml_cpu_xllama_flags(void);
++GGML_BACKEND_API void ggml_cpu_xllama_reset_stats(void);
++GGML_BACKEND_API struct ggml_xllama_op_stat ggml_cpu_xllama_op_stat(int op);
++GGML_BACKEND_API uint64_t ggml_cpu_xllama_guided_calls(void);
++GGML_BACKEND_API uint64_t ggml_cpu_xllama_row_calls(void);
++GGML_BACKEND_API void ggml_cpu_xllama_note_row(void);
++#ifdef __cplusplus
++}
++#endif

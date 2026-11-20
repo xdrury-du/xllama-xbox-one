@@ -159,3 +159,60 @@ preserved. Raw streams, JSON, per-profile HTML tables, PNG/SVG graphs, full
 responses and CSV/JSON summaries are written as tests finish. Missing metrics
 are shown as unmeasured. A shorter primary reply triggers a separate length
 follow-up without replacing the primary comparison or its failed length gate.
+
+## Short kernel campaign
+
+The current candidate entry point is `scripts/xbox-smol-short.py`. The original
+long-response campaign above is historical and is not invoked by this entry point.
+Every performance request has an explicit 64-token reply cap. Four functional
+checks use 8 or 32 tokens, including warm-ups. Three performance repetitions
+use the same short bicycle prompt, greedy sampling, fresh KV, warm weights,
+8192 context, six threads, batch 512, microbatch 128 and F16 KV. A 180-second
+request watchdog and socket timeout guard a stalled request. Runs remain serial.
+
+| Profile      | Effective CPU change                                                  |
+| ------------ | --------------------------------------------------------------------- |
+| smol-base    | Patched build with all optional CPU changes off                       |
+| smol-guided  | Atomically claimed matrix row chunks shrink toward the tail           |
+| smol-row     | Split contiguous single-row F32 binary operations and SiLU by columns |
+| smol-both    | Combine the two previously isolated changes                           |
+| smol-profile | Instrument stock operations, separate from performance comparisons    |
+
+These adapt the guided scheduling and single-row work sharing described in
+[smolmaxxing](https://github.com/hyperionaidev/smolmaxxing/blob/main/docs/how-it-works.md)
+to this pin and the Xbox CPU. No ARM intrinsics or trained model weights are imported.
+The output vocabulary already has 131072 rows, divisible by 32. The greedy sampler
+already scans logits without sorting. Those observations are admission checks,
+not new optimizations or measured speedups. Vocabulary pruning, weight
+requantization and custom attention remain separate, unimplemented candidates.
+
+The new API profiles reject omitted reply limits or limits above 64 before model
+loading. CPU flags are process-global only while the serialized API generation
+owns the compute permit and session lock. A scope guard resets flags to zero on
+return or exception, so the normal GUI does not inherit the experiment. Profile
+telemetry reports accepted flags and actual guided/row-path call counts. A
+requested flag with no exercised path cannot count as an improvement.
+
+`smol-profile` returns per-operation call counts and CPU wall time, including
+barrier waits. Fused work is attributed to its leading operation. Output-head
+matrix time is tagged by `result_output`. These instrumented request aggregates
+include prefill and decode and are diagnostic, not isolated kernel timers or
+unmodified performance measurements.
+
+Improved requires three valid 64-token capped runs, all functional checks passing,
+actual candidate execution, output identical to the matched-build control, and
+at least five percent higher median decode rate. Early EOS is preserved and is
+not accepted as an equal-length timing sample. There is no long-response gate in
+this protocol and no inference about long-response stability. An old-build
+baseline is preparation only and is never substituted for the matched-build control.
+
+```bash
+python3 scripts/xbox-smol-short.py --xbox <private-IP> --output <directory> --build-info <artifact-build-info.json>
+```
+
+Each profile saves its own result, graph, HTML report and full capped responses.
+The summary preserves every run. Reports do not modify the earlier campaign.
+The patch-specific correctness gate is `scripts/test-one-x-cpu-patch.sh`. It
+builds an isolated copy of the pinned ggml with the optional patch and tests
+Ministral-width Q4_K/Q6_K matrices, odd row tails, single-row operations,
+multiple thread counts and stock fallback. It does not edit the submodule.

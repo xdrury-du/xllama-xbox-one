@@ -64,6 +64,10 @@
     #include <thread>
     #include <vector>
 
+    #ifdef XLLAMA_XBOX_ONE
+        #include "ggml-cpu.h"
+    #endif
+
 namespace xllama::api {
 namespace {
 
@@ -72,6 +76,18 @@ using namespace winrt::Windows::Storage::Streams;
 using namespace winrt::Windows::Data::Json;
 
     #ifdef XLLAMA_XBOX_ONE
+// The compute permit and resident-session lock exclude other graph users.
+class OneXCpuExperiment {
+  public:
+    explicit OneXCpuExperiment(unsigned flags) {
+        ggml_cpu_xllama_set_flags(flags);
+        ggml_cpu_xllama_reset_stats();
+    }
+    ~OneXCpuExperiment() {
+        ggml_cpu_xllama_set_flags(0);
+    }
+};
+
 // Samples current RSS, not the process-lifetime peak (which cannot reset).
 class OneXMemorySample {
   public:
@@ -1031,6 +1047,13 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
             return error_json(limit.error);
         }
         n_predict = limit.value;
+    #ifdef XLLAMA_XBOX_ONE
+        if (experiment.rfind("smol-", 0) == 0 && (auto_reply || n_predict > 64)) {
+            status = "400 Bad Request";
+            return error_json(
+                "smol profiles require an explicit reply budget of at most 64 tokens");
+        }
+    #endif
         const std::string sampling_error = check_sampling(root);
         if (!sampling_error.empty()) {
             status = "400 Bad Request";
@@ -1126,6 +1149,9 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
         }
     }
 
+    #ifdef XLLAMA_XBOX_ONE
+    OneXCpuExperiment cpu_experiment(::xllama::session_hub().params.cpu_experiment_flags);
+    #endif
     // Every request check is done: from here on, a streamed reply owns the
     // socket. The head is written before SseStream exists, so a failure that is
     // provably byte-free can still answer with JSON.
@@ -1214,6 +1240,9 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
                  winrt::Windows::System::MemoryManager::AppMemoryUsageLimit()},
                 {"reply_token_budget", gp.n_predict},
                 {"auto_reply_budget", auto_reply},
+                {"cpu_experiment_flags", ggml_cpu_xllama_flags()},
+                {"cpu_guided_calls", ggml_cpu_xllama_guided_calls()},
+                {"cpu_row_calls", ggml_cpu_xllama_row_calls()},
                 {"gpu_calls", gpu_stats.calls},
                 {"gpu_dispatches", gpu_stats.dispatches},
                 {"gpu_time_valid", gpu_stats.gpu_time_valid()},
@@ -1221,6 +1250,18 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
                 {"gpu_memory_snapshot_available", gpu_memory.available},
                 {"gpu_memory_mib_after", gpu_memory.current_mb},
                 {"gpu_budget_mib_after", gpu_memory.budget_mb}};
+            if (ggml_cpu_xllama_flags() & GGML_XLLAMA_PROFILE) {
+                auto rows = nlohmann::json::array();
+                for (int op = 0; op < GGML_OP_COUNT; ++op) {
+                    const auto row = ggml_cpu_xllama_op_stat(op);
+                    if (row.calls > 0)
+                        rows.push_back({{"operation", ggml_op_name(static_cast<ggml_op>(op))},
+                                        {"calls", row.calls},
+                                        {"wall_ms", row.wall_us / 1000.0},
+                                        {"output_matmul_ms", row.head_wall_us / 1000.0}});
+                }
+                measurements["cpu_operation_profile"] = std::move(rows);
+            }
             sse->set_diagnostics(JsonObject::Parse(winrt::to_hstring(measurements.dump())));
     #endif
             // 200 is already on the wire: only the stream can report the outcome.

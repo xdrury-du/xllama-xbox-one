@@ -58,6 +58,9 @@ struct SessionParams {
     // ORT sessions ignore this field. Hybrid caches that refuse tail rewind
     // disable speculation at runtime for that generation (no KV corruption).
     bool prompt_lookup = false;
+
+    // Reviewed One X CPU experiments, scoped to a LAN request. Zero is stock.
+    unsigned cpu_experiment_flags = 0;
 };
 
 struct GenerateParams {

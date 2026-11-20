@@ -217,6 +217,9 @@ class Campaign:
         path = directory / f"{label}.json"
         payload = {"model": MODEL, "xbox_experiment": profile, "xbox_fresh": True,
                    "messages": messages, "temperature": 0, "seed": 42, "stream": True}
+        reply_limit = getattr(self, "reply_token_limit", None)
+        if reply_limit is not None:
+            payload["max_tokens"] = reply_limit
         if path.exists():
             record = json.loads(path.read_text())
             if not preparing and record.get("done") and not record.get("error") and record.get("request") == payload and record.get("build_info") == self.build_info:
@@ -230,7 +233,8 @@ class Campaign:
                   "request": payload, "text": "", "done": False, "error": None,
                   "first_text_seconds": None, "usage": {}, "progress": [], "build_info": self.build_info,
                   "elapsed_watchdog_seconds":self.watchdog_seconds}
-        print(f"START {profile}/{label} (reply budget omitted; EOS/context)", flush=True)
+        budget_label = f"reply cap {reply_limit}" if reply_limit is not None else "reply budget omitted; EOS/context"
+        print(f"START {profile}/{label} ({budget_label})", flush=True)
         begin = time.perf_counter()
         last_notice = begin
         try:

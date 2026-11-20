@@ -4,7 +4,13 @@ name: Xbox One CPU experiment
 
 on:
   push:
-    branches: [codex/xbox-one-cpu-baseline, codex/ministral3-one-x, codex/one-x-gpu-probe, codex/ministral-one-x-experiments]
+    branches:
+      [
+        codex/xbox-one-cpu-baseline,
+        codex/ministral3-one-x,
+        codex/one-x-gpu-probe,
+        codex/ministral-one-x-experiments,
+      ]
   workflow_dispatch:
 
 permissions:
@@ -31,7 +37,9 @@ jobs:
           cmake --build build/linux-test -j2
           ctest --test-dir build/linux-test --output-on-failure
       - name: Test Mac text chat client and experiment verdicts
-        run: python3 -m unittest tests/test_xbox_chat_client.py tests/test_xbox_campaign.py
+        run: python3 -m unittest tests/test_xbox_chat_client.py tests/test_xbox_campaign.py tests/test_xbox_smol_short.py
+      - name: Test isolated optional CPU patch
+        run: scripts/test-one-x-cpu-patch.sh
       - name: Check catalogue and documentation coherence
         run: python3 scripts/check-coherence.py
 

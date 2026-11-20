@@ -130,3 +130,8 @@ Snapshot restoration is not a delta-prefill guarantee. A rendered prompt can
 diverge inside a saved hybrid tail that cannot rewind; the session clears it
 and safely prefills the full prompt. See [KV architecture](../architecture.md#kv-cache-reuse-both-backends)
 and the separate prefix-reuse/fallback [console probes](../console-validation-runbook.md#controlled-model-writer-and-kv-fallback-probes).
+
+The internal `cpu_experiment_flags` field is used by the reviewed One X LAN
+experiments. Its default zero preserves stock execution. The API scopes these
+flags to its serialized generation and clears them afterwards. This field does
+not enable a general cross-platform backend capability.
