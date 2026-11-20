@@ -91,6 +91,30 @@ HTTP 200 reports the measured stage, capability query results and compute
 correctness, including failures. It does not enable GPU inference. See the
 [probe runbook](xbox-one-gpu-probe.md) for the success criteria and limits.
 
+### One X Ministral experiments
+
+The One X experiment build accepts `xbox_experiment` on a Ministral chat
+request. Profiles are defined in `xbox_one_experiment.h`. Every candidate
+changes one setting from the 8192-context CPU baseline. `xbox_fresh: true`
+clears resident KV before generation without reloading weights. Unsupported
+models and unknown profile ids are rejected. Explicit token budgets remain
+validated against the effective profile context.
+
+For plain One X chat, omitting both token-budget fields generates until EOS,
+a stop sequence or the remaining context boundary. It does not silently use
+the normal 512-token default. The final SSE usage event includes
+`xbox_metrics`: requested configuration, engine prefill/decode timing, observed
+20-ms-sampled peak RSS, actual KV mode and GPU dispatch counters. Configured
+GPU layers do not mean every operation runs on the GPU. Kernel timestamps
+are usable only when `gpu_time_valid` is true. Engine decode time includes
+stream callbacks. Non-streamed and tool-proposal replies retain their normal
+response schema.
+
+`POST /v1/diagnostics/gpu-selftest` unloads the resident model, runs the
+quantized backend correctness suite and returns every result row. The result
+is cached per process. A failed kernel suite blocks GPU model profiles.
+Relaunch in Game mode after an installation, which can reset App type.
+
 ### Model download (`POST /api/pull`)
 
 The request is `{"model":"<catalogue-id-or-alias>","stream":true}`; `stream` defaults to
@@ -428,3 +452,40 @@ curl -s http://<ip-xbox>:11434/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model":"<catalogue-id>","messages":[{"role":"user","content":"Say hi"}]}'
 ```
+
+### Short One X CPU experiments
+
+The Ministral-only `xbox_experiment` values `smol-base`, `smol-guided`, `smol-row`,
+`smol-both` and `smol-profile` require an explicit reply limit from 1 through 64.
+Omitted or larger limits return HTTP 400 before model loading. They retain the
+8192-context experiment baseline and are described in
+[the short campaign protocol](ministral-one-x-campaign.md#short-kernel-campaign).
+Streamed `xbox_metrics` adds `cpu_experiment_flags`, `cpu_guided_calls`, and
+`cpu_row_calls`. The profiling-only value also returns `cpu_operation_profile`,
+with operation names, call counts, inclusive `wall_ms`, and tagged
+`output_matmul_ms`. Profiling covers prefill plus decode and may perturb timing.
+It is excluded from the speed comparison. CPU switches are scoped to generation
+and reset before the request releases its compute permit.
+
+### Short weight and matrix experiments
+
+The One X build also admits `smol-pair-q4`, `smol-pair-q6`, `smol-pair-all`,
+`smol-compress-body`, `smol-compress-head` and `smol-compress-all`. They use the
+same explicit 1 through 64 reply limit. Weight compression is part of session
+load identity, so returning to a normal GUI/API session reloads stock weights.
+Generation kernel flags and load-time conversion modes have separate scope
+guards. See [the protocol](ministral-one-x-campaign.md#weight-and-matrix-campaign).
+
+`GET /v1/experiments/info` reports the actual package version, weight protocol
+revision, reply cap and process memory allowance. `POST /v1/experiments/reset`
+unloads the one resident session under the normal compute permit and hub lock.
+It returns HTTP 503 when busy and does not modify model files or settings.
+These routes are only compiled into the One X experiment build.
+
+Stream metrics add `cpu_pair_q4_calls`, `cpu_pair_q6_calls`,
+`weight_compression_mode`, `weight_compressed_tensors`, `weight_saved_bytes`
+and `resident_model_weight_bytes`. Pair counters record worker-zero calls on
+the actual paired path. Weight bytes report allocated model backend buffers,
+including alignment, separately from sampled process RSS and source file size.
+Conversion counts and savings persist with the resident model and reset on the
+next model load. Compression is restricted to non-mapped CPU host buffers.

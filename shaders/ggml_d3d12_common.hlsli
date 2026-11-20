@@ -38,16 +38,29 @@ ByteAddressBuffer W : register(t0);
 RWByteAddressBuffer X : register(u1);
 RWStructuredBuffer<float> Y : register(u0);
 
+#ifdef XLLAMA_SM5
+groupshared float red[NUM_ROWS * NUM_THREADS];
+#define RED(row, thread) red[(row) * NUM_THREADS + (thread)]
+#else
 groupshared float red[NUM_ROWS][NUM_THREADS];
+#define RED(row, thread) red[row][thread]
+#endif
 
 // Q4_0 (18 B) and Q6_K (210 B) blocks sit on 2-byte boundaries. ByteAddressBuffer
 // loads need 4-byte alignment, so read the aligned dwords and shift.
 uint ld32(uint a) {
+#ifdef XLLAMA_SM5
+    // FXC cannot inline the early-return load helper inside these loops.
+    const uint2 words = W.Load2(a & ~3u);
+    return (a & 2u) != 0u ? (words.x >> 16) | (words.y << 16) : words.x;
+#else
+
     const uint b = a & ~3u;
     const uint lo = W.Load(b);
     if ((a & 3u) == 0u)
         return lo;
     return (lo >> 16) | (W.Load(b + 4u) << 16);
+#endif
 }
 
 uint ld16(uint a) {
@@ -57,11 +70,18 @@ uint ld16(uint a) {
 
 // X reads: block_q8_0 is 34 B, so q8_0 columns sit on 2-byte boundaries too.
 uint xld32(uint a) {
+#ifdef XLLAMA_SM5
+    // FXC cannot inline the early-return load helper inside these loops.
+    const uint2 words = X.Load2(a & ~3u);
+    return (a & 2u) != 0u ? (words.x >> 16) | (words.y << 16) : words.x;
+#else
+
     const uint b = a & ~3u;
     const uint lo = X.Load(b);
     if ((a & 3u) == 0u)
         return lo;
     return (lo >> 16) | (X.Load(b + 4u) << 16);
+#endif
 }
 
 uint xld16(uint a) {
@@ -71,29 +91,48 @@ uint xld16(uint a) {
 
 // Packed signed int8 dot products (SM 6.4). Weight lanes (nibbles 0..15, Q6_K
 // values 0..63) are valid non-negative int8.
+#ifdef XLLAMA_SM5
+// SM 5.1 has no packed dot intrinsic. Preserve its signed-byte arithmetic.
+int byte_lane(uint value, uint lane) {
+    return asint(value << (24u - 8u * lane)) >> 24;
+}
+int dot4(uint a, uint b) {
+    return byte_lane(a, 0u) * byte_lane(b, 0u) +
+           byte_lane(a, 1u) * byte_lane(b, 1u) +
+           byte_lane(a, 2u) * byte_lane(b, 2u) +
+           byte_lane(a, 3u) * byte_lane(b, 3u);
+}
+int sum4(uint b) {
+    return byte_lane(b, 0u) + byte_lane(b, 1u) + byte_lane(b, 2u) + byte_lane(b, 3u);
+}
+#else
 int dot4(uint a, uint b) {
     return dot4add_i8packed(a, b, 0);
 }
-
 int sum4(uint b) {
     return dot4add_i8packed(b, 0x01010101u, 0);
 }
+#endif
 
 // Sum each row's 64 partials and store; rows past n are skipped, never early-exit.
+#ifdef XLLAMA_SM5
+void reduce_store(float4 acc, uint tid, uint row0, uint col) {
+#else
 void reduce_store(float acc[NUM_ROWS], uint tid, uint row0, uint col) {
+#endif
     [unroll]
     for (uint r = 0; r < NUM_ROWS; ++r)
-        red[r][tid] = acc[r];
+        RED(r, tid) = acc[r];
     GroupMemoryBarrierWithGroupSync();
     [unroll]
     for (uint stride = NUM_THREADS / 2u; stride > 0u; stride >>= 1u) {
         if (tid < stride) {
             [unroll]
             for (uint r = 0; r < NUM_ROWS; ++r)
-                red[r][tid] += red[r][tid + stride];
+                RED(r, tid) += RED(r, tid + stride);
         }
         GroupMemoryBarrierWithGroupSync();
     }
     if (tid < NUM_ROWS && row0 + tid < n)
-        Y[col * y_stride + row0 + tid] = red[tid][0];
+        Y[col * y_stride + row0 + tid] = RED(tid, 0);
 }

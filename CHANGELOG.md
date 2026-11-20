@@ -1,5 +1,11 @@
 # Changelog
 
+## Fork: Ministral One X controlled experiments
+
+- Compile SM5.1-compatible inference kernels, gate model offload on the GPU
+  selftest and add isolated runtime profiles with timing/memory telemetry.
+- Remove the Mac client reply cap. Blank budgets run to EOS or available context.
+
 ## Fork: Xbox One X GPU access probe
 
 - Add an opt-in LAN diagnostic for device capabilities and one checked FP32

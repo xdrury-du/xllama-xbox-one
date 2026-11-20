@@ -202,6 +202,7 @@ inline int resolve_max_length(int n_ctx, int n_prompt, int n_predict, int overri
 
 /// Result of an inference call.
 struct InferenceResult {
+    bool kv_q8_active = false;
     /// Whether generation succeeded.
     bool success = false;
 

@@ -1,0 +1,425 @@
+--- a/ggml/include/ggml-xllama-cpu.h
++++ b/ggml/include/ggml-xllama-cpu.h
+@@ -10,6 +10,8 @@
+     GGML_XLLAMA_PROFILE = 1,
+     GGML_XLLAMA_GUIDED = 2,
+     GGML_XLLAMA_ROW_OPS = 4,
++    GGML_XLLAMA_PAIR_Q4 = 8,
++    GGML_XLLAMA_PAIR_Q6 = 16,
+ };
+ struct ggml_xllama_op_stat {
+     uint64_t calls;
+@@ -23,6 +25,18 @@
+ GGML_BACKEND_API uint64_t ggml_cpu_xllama_guided_calls(void);
+ GGML_BACKEND_API uint64_t ggml_cpu_xllama_row_calls(void);
+ GGML_BACKEND_API void ggml_cpu_xllama_note_row(void);
++// Load mode: 1=Q6 transformer matrices, 2=Q6 embedding/output, 3=both.
++// The loader is serialized by the app's compute permit and session lock.
++GGML_BACKEND_API void ggml_cpu_xllama_weight_begin(unsigned mode);
++GGML_BACKEND_API void ggml_cpu_xllama_weight_end(void);
++GGML_BACKEND_API unsigned ggml_cpu_xllama_weight_mode(void);
++GGML_BACKEND_API void ggml_cpu_xllama_note_weight(uint64_t source, uint64_t target);
++GGML_BACKEND_API uint64_t ggml_cpu_xllama_weight_tensors(void);
++GGML_BACKEND_API uint64_t ggml_cpu_xllama_weight_saved_bytes(void);
++GGML_BACKEND_API uint64_t ggml_cpu_xllama_pair_q4_calls(void);
++GGML_BACKEND_API uint64_t ggml_cpu_xllama_pair_q6_calls(void);
++GGML_BACKEND_API void ggml_cpu_xllama_pair_q4(int n, float * out, const void * a, const void * b, const void * input);
++GGML_BACKEND_API void ggml_cpu_xllama_pair_q6(int n, float * out, const void * a, const void * b, const void * input);
+ #ifdef __cplusplus
+ }
+ #endif
+--- a/ggml/src/ggml-cpu/ggml-cpu.c
++++ b/ggml/src/ggml-cpu/ggml-cpu.c
+@@ -1165,11 +1165,28 @@
+ static struct ggml_xllama_op_stat xllama_cpu_stats[GGML_OP_COUNT];
+ static uint64_t xllama_guided_calls;
+ static uint64_t xllama_row_calls;
+-void ggml_cpu_xllama_set_flags(unsigned flags) { xllama_cpu_flags = flags & 7u; }
++static uint64_t xllama_pair_q4_calls, xllama_pair_q6_calls;
++static unsigned xllama_weight_mode;
++static uint64_t xllama_weight_tensors, xllama_weight_saved;
++void ggml_cpu_xllama_weight_begin(unsigned mode) {
++    xllama_weight_mode = mode;
++    xllama_weight_tensors = xllama_weight_saved = 0;
++}
++void ggml_cpu_xllama_weight_end(void) { xllama_weight_mode = 0; }
++unsigned ggml_cpu_xllama_weight_mode(void) { return xllama_weight_mode; }
++void ggml_cpu_xllama_note_weight(uint64_t source, uint64_t target) {
++    ++xllama_weight_tensors; xllama_weight_saved += source - target;
++}
++uint64_t ggml_cpu_xllama_weight_tensors(void) { return xllama_weight_tensors; }
++uint64_t ggml_cpu_xllama_weight_saved_bytes(void) { return xllama_weight_saved; }
++uint64_t ggml_cpu_xllama_pair_q4_calls(void) { return xllama_pair_q4_calls; }
++uint64_t ggml_cpu_xllama_pair_q6_calls(void) { return xllama_pair_q6_calls; }
++void ggml_cpu_xllama_set_flags(unsigned flags) { xllama_cpu_flags = flags & 31u; }
+ unsigned ggml_cpu_xllama_flags(void) { return xllama_cpu_flags; }
+ void ggml_cpu_xllama_reset_stats(void) {
+     memset(xllama_cpu_stats, 0, sizeof(xllama_cpu_stats));
+     xllama_guided_calls = xllama_row_calls = 0;
++    xllama_pair_q4_calls = xllama_pair_q6_calls = 0;
+ }
+ struct ggml_xllama_op_stat ggml_cpu_xllama_op_stat(int op) {
+     struct ggml_xllama_op_stat empty = {0, 0, 0};
+@@ -1234,6 +1251,31 @@
+ 
+     const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
+     const size_t row_size = ggml_row_size(vec_dot_type, ne10);
++
++#if defined(__x86_64__) || defined(_M_X64)
++    const bool pair_q4 = type == GGML_TYPE_Q4_K && (xllama_cpu_flags & GGML_XLLAMA_PAIR_Q4);
++    const bool pair_q6 = type == GGML_TYPE_Q6_K && (xllama_cpu_flags & GGML_XLLAMA_PAIR_Q6);
++    if ((pair_q4 || pair_q6) && num_rows_per_vec_dot == 1 &&
++        ne02 == 1 && ne03 == 1 && ggml_nrows(src1) == 1 && ir1_start == 0 && ir1_end == 1) {
++        float * out = (float *) dst->data;
++        int64_t row = ir0_start;
++        for (; row + 1 < ir0_end; row += 2) {
++            const void * a = (const char *) src0->data + row * nb01;
++            const void * b = (const char *) src0->data + (row + 1) * nb01;
++            if (pair_q4) {
++                ggml_cpu_xllama_pair_q4((int) ne00, out + row, a, b, wdata);
++                if (params->ith == 0) { ++xllama_pair_q4_calls; }
++            } else {
++                ggml_cpu_xllama_pair_q6((int) ne00, out + row, a, b, wdata);
++                if (params->ith == 0) { ++xllama_pair_q6_calls; }
++            }
++        }
++        if (row < ir0_end) {
++            vec_dot(ne00, out + row, 0, (const char *) src0->data + row * nb01, 0, wdata, 0, 1);
++        }
++        return;
++    }
++#endif
+ 
+     assert(ne12 % ne02 == 0);
+     assert(ne13 % ne03 == 0);
+--- a/ggml/src/ggml-cpu/arch/x86/quants.c
++++ b/ggml/src/ggml-cpu/arch/x86/quants.c
+@@ -4106,3 +4106,231 @@
+     ggml_vec_dot_iq4_xs_q8_K_generic(n, s, bs, vx, bx, vy, by, nrc);
+ #endif
+ }
++
++// Two output rows share their Q8 activation loads; weight layout is unchanged.
++void ggml_cpu_xllama_pair_q4(int n, float * out, const void * a, const void * b, const void * input) {
++    assert(n % QK_K == 0);
++#if defined(__AVX__) && !defined(__AVX2__)
++    const block_q4_K * x[2] = {a, b};
++    const block_q8_K * y = input;
++    const int nb = n / QK_K;
++    static const uint32_t kmask1 = 0x3f3f3f3f;
++    static const uint32_t kmask2 = 0x0f0f0f0f;
++    static const uint32_t kmask3 = 0x03030303;
++    uint32_t utmp[4];
++
++    const __m128i m4 = _mm_set1_epi8(0xF);
++    const __m128i m2 = _mm_set1_epi8(0x2);
++
++    __m256 acc[2] = {_mm256_setzero_ps(), _mm256_setzero_ps()};
++    __m128 acc_m[2] = {_mm_setzero_ps(), _mm_setzero_ps()};
++
++   for (int i = 0; i < nb; ++i) {
++
++        __m128i shared_q8[16];
++        for (int k = 0; k < 16; ++k) {
++            shared_q8[k] = _mm_loadu_si128((const __m128i *) (y[i].qs + k * 16));
++        }
++        for (int row = 0; row < 2; ++row) {
++            const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[row][i].d);
++            const float dmin = -y[i].d * GGML_CPU_FP16_TO_FP32(x[row][i].dmin);
++
++            const uint8_t * GGML_RESTRICT q4 = x[row][i].qs;
++            int shared_index = 0;
++
++            memcpy(utmp, x[row][i].scales, 12);
++            utmp[3] = ((utmp[2] >> 4) & kmask2) | (((utmp[1] >> 6) & kmask3) << 4);
++            const uint32_t uaux = utmp[1] & kmask1;
++            utmp[1] = (utmp[2] & kmask2) | (((utmp[0] >> 6) & kmask3) << 4);
++            utmp[2] = uaux;
++            utmp[0] &= kmask1;
++
++            const __m128i utmps = _mm_set_epi32(utmp[3], utmp[2], utmp[1], utmp[0]);
++            const __m128i scales = _mm_cvtepu8_epi16(utmps);
++            const __m128i mins = _mm_cvtepu8_epi16(_mm_unpackhi_epi64(utmps, utmps));
++
++            const __m128i q8sums_0 = _mm_loadu_si128((const __m128i*)&y[i].bsums[0]);
++            const __m128i q8sums_1 = _mm_loadu_si128((const __m128i*)&y[i].bsums[8]);
++            const __m128i q8s = _mm_hadd_epi16(q8sums_0, q8sums_1);
++            const __m128i prod = _mm_madd_epi16(mins, q8s);
++            acc_m[row] = _mm_add_ps(_mm_mul_ps(_mm_set1_ps(dmin), _mm_cvtepi32_ps(prod)), acc_m[row]);
++
++            __m128i sumi_0 = _mm_setzero_si128();
++            __m128i sumi_1 = _mm_setzero_si128();
++
++            __m128i shuffle = _mm_set1_epi16(0x0100);
++            for (int j = 0; j < QK_K/64; ++j) {
++
++                const __m128i scale_l = _mm_shuffle_epi8(scales, shuffle);
++                shuffle = _mm_add_epi16(shuffle, m2);
++                const __m128i scale_h = _mm_shuffle_epi8(scales, shuffle);
++                shuffle = _mm_add_epi16(shuffle, m2);
++
++                __m128i q4bits = _mm_loadu_si128((const __m128i*)q4); q4 += 16;
++                const __m128i q4l_0 = _mm_and_si128(q4bits, m4);
++                const __m128i q4h_0 = _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4);
++                q4bits = _mm_loadu_si128((const __m128i*)q4); q4 += 16;
++                const __m128i q4l_1 = _mm_and_si128(q4bits, m4);
++                const __m128i q4h_1 = _mm_and_si128(_mm_srli_epi16(q4bits, 4), m4);
++
++                const __m128i q8l_0 = shared_q8[shared_index++];
++                __m128i p16l = _mm_maddubs_epi16(q4l_0, q8l_0);
++                p16l = _mm_madd_epi16(scale_l, p16l);
++                sumi_0 = _mm_add_epi32(sumi_0, p16l);
++                const __m128i q8l_1 = shared_q8[shared_index++];
++                p16l = _mm_maddubs_epi16(q4l_1, q8l_1);
++                p16l = _mm_madd_epi16(scale_l, p16l);
++                sumi_1 = _mm_add_epi32(sumi_1, p16l);
++
++                const __m128i q8h_0 = shared_q8[shared_index++];
++                __m128i p16h = _mm_maddubs_epi16(q4h_0, q8h_0);
++                p16h = _mm_madd_epi16(scale_h, p16h);
++                sumi_0 = _mm_add_epi32(sumi_0, p16h);
++                const __m128i q8h_1 = shared_q8[shared_index++];
++                p16h = _mm_maddubs_epi16(q4h_1, q8h_1);
++                p16h = _mm_madd_epi16(scale_h, p16h);
++                sumi_1 = _mm_add_epi32(sumi_1, p16h);
++
++            }
++
++            __m256 vd = _mm256_set1_ps(d);
++            __m256i sumi = MM256_SET_M128I(sumi_1, sumi_0);
++            acc[row] = _mm256_add_ps(_mm256_mul_ps(vd, _mm256_cvtepi32_ps(sumi)), acc[row]);
++        }
++    }
++
++    for (int row = 0; row < 2; ++row) {
++        acc_m[row] = _mm_add_ps(acc_m[row], _mm_movehl_ps(acc_m[row], acc_m[row]));
++        acc_m[row] = _mm_add_ss(acc_m[row], _mm_movehdup_ps(acc_m[row]));
++        out[row] = hsum_float_8(acc[row]) + _mm_cvtss_f32(acc_m[row]);
++    }
++
++#else
++    ggml_vec_dot_q4_K_q8_K(n, out, 0, a, 0, input, 0, 1);
++    ggml_vec_dot_q4_K_q8_K(n, out + 1, 0, b, 0, input, 0, 1);
++#endif
++}
++
++// Two output rows share their Q8 activation loads; weight layout is unchanged.
++void ggml_cpu_xllama_pair_q6(int n, float * out, const void * a, const void * b, const void * input) {
++    assert(n % QK_K == 0);
++#if defined(__AVX__) && !defined(__AVX2__)
++    const block_q6_K * x[2] = {a, b};
++    const block_q8_K * y = input;
++    const int nb = n / QK_K;
++
++    const __m128i m3 = _mm_set1_epi8(3);
++    const __m128i m15 = _mm_set1_epi8(15);
++
++    __m256 acc[2] = {_mm256_setzero_ps(), _mm256_setzero_ps()};
++
++    for (int i = 0; i < nb; ++i) {
++
++        __m128i shared_q8[16];
++        for (int k = 0; k < 16; ++k) {
++            shared_q8[k] = _mm_loadu_si128((const __m128i *) (y[i].qs + k * 16));
++        }
++        for (int row = 0; row < 2; ++row) {
++            const float d = y[i].d * GGML_CPU_FP16_TO_FP32(x[row][i].d);
++
++            const uint8_t * GGML_RESTRICT q4 = x[row][i].ql;
++            const uint8_t * GGML_RESTRICT qh = x[row][i].qh;
++            int shared_index = 0;
++
++            // handle the q6_k -32 offset separately using bsums
++            const __m128i q8sums_0 = _mm_loadu_si128((const __m128i*)y[i].bsums);
++            const __m128i q8sums_1 = _mm_loadu_si128((const __m128i*)y[i].bsums + 1);
++            const __m128i scales = _mm_loadu_si128((const __m128i*)x[row][i].scales);
++            const __m128i scales_16_0 = _mm_cvtepi8_epi16(scales);
++            const __m128i scales_16_1 = _mm_cvtepi8_epi16(_mm_bsrli_si128(scales, 8));
++            const __m128i q8sclsub_0 = _mm_slli_epi32(_mm_madd_epi16(q8sums_0, scales_16_0), 5);
++            const __m128i q8sclsub_1 = _mm_slli_epi32(_mm_madd_epi16(q8sums_1, scales_16_1), 5);
++
++            __m128i sumi_0 = _mm_setzero_si128();
++            __m128i sumi_1 = _mm_setzero_si128();
++
++            int is = 0;
++
++            for (int j = 0; j < QK_K/128; ++j) {
++
++                const __m128i q4bitsH_0 = _mm_loadu_si128((const __m128i*)qh); qh += 16;
++                const __m128i q4bitsH_1 = _mm_loadu_si128((const __m128i*)qh); qh += 16;
++
++                const __m128i q4h_0 = _mm_slli_epi16(_mm_and_si128(q4bitsH_0, m3), 4);
++                const __m128i q4h_1 = _mm_slli_epi16(_mm_and_si128(q4bitsH_1, m3), 4);
++                const __m128i q4h_2 = _mm_slli_epi16(_mm_and_si128(q4bitsH_0, _mm_set1_epi8(12)), 2);
++                const __m128i q4h_3 = _mm_slli_epi16(_mm_and_si128(q4bitsH_1, _mm_set1_epi8(12)), 2);
++                const __m128i q4h_4 = _mm_and_si128(q4bitsH_0, _mm_set1_epi8(48));
++                const __m128i q4h_5 = _mm_and_si128(q4bitsH_1, _mm_set1_epi8(48));
++                const __m128i q4h_6 = _mm_srli_epi16(_mm_and_si128(q4bitsH_0, _mm_set1_epi8(-64)), 2);
++                const __m128i q4h_7 = _mm_srli_epi16(_mm_and_si128(q4bitsH_1, _mm_set1_epi8(-64)), 2);
++
++                const __m128i q4bits1_0 = _mm_loadu_si128((const __m128i*)q4); q4 += 16;
++                const __m128i q4bits1_1 = _mm_loadu_si128((const __m128i*)q4); q4 += 16;
++                const __m128i q4bits2_0 = _mm_loadu_si128((const __m128i*)q4); q4 += 16;
++                const __m128i q4bits2_1 = _mm_loadu_si128((const __m128i*)q4); q4 += 16;
++
++                const __m128i q4_0 = _mm_or_si128(_mm_and_si128(q4bits1_0, m15), q4h_0);
++                const __m128i q4_1 = _mm_or_si128(_mm_and_si128(q4bits1_1, m15), q4h_1);
++                const __m128i q4_2 = _mm_or_si128(_mm_and_si128(q4bits2_0, m15), q4h_2);
++                const __m128i q4_3 = _mm_or_si128(_mm_and_si128(q4bits2_1, m15), q4h_3);
++                const __m128i q4_4 = _mm_or_si128(_mm_and_si128(_mm_srli_epi16(q4bits1_0, 4), m15), q4h_4);
++                const __m128i q4_5 = _mm_or_si128(_mm_and_si128(_mm_srli_epi16(q4bits1_1, 4), m15), q4h_5);
++                const __m128i q4_6 = _mm_or_si128(_mm_and_si128(_mm_srli_epi16(q4bits2_0, 4), m15), q4h_6);
++                const __m128i q4_7 = _mm_or_si128(_mm_and_si128(_mm_srli_epi16(q4bits2_1, 4), m15), q4h_7);
++
++                const __m128i q8_0 = shared_q8[shared_index++];
++                const __m128i q8_1 = shared_q8[shared_index++];
++                const __m128i q8_2 = shared_q8[shared_index++];
++                const __m128i q8_3 = shared_q8[shared_index++];
++                const __m128i q8_4 = shared_q8[shared_index++];
++                const __m128i q8_5 = shared_q8[shared_index++];
++                const __m128i q8_6 = shared_q8[shared_index++];
++                const __m128i q8_7 = shared_q8[shared_index++];
++
++                __m128i p16_0 = _mm_maddubs_epi16(q4_0, q8_0);
++                __m128i p16_1 = _mm_maddubs_epi16(q4_1, q8_1);
++                __m128i p16_2 = _mm_maddubs_epi16(q4_2, q8_2);
++                __m128i p16_3 = _mm_maddubs_epi16(q4_3, q8_3);
++                __m128i p16_4 = _mm_maddubs_epi16(q4_4, q8_4);
++                __m128i p16_5 = _mm_maddubs_epi16(q4_5, q8_5);
++                __m128i p16_6 = _mm_maddubs_epi16(q4_6, q8_6);
++                __m128i p16_7 = _mm_maddubs_epi16(q4_7, q8_7);
++
++                const __m128i scale_0 = _mm_shuffle_epi8(scales, get_scale_shuffle(is + 0));
++                const __m128i scale_1 = _mm_shuffle_epi8(scales, get_scale_shuffle(is + 1));
++                const __m128i scale_2 = _mm_shuffle_epi8(scales, get_scale_shuffle(is + 2));
++                const __m128i scale_3 = _mm_shuffle_epi8(scales, get_scale_shuffle(is + 3));
++                is += 4;
++
++                p16_0 = _mm_madd_epi16(_mm_cvtepi8_epi16(scale_0), p16_0);
++                p16_1 = _mm_madd_epi16(_mm_cvtepi8_epi16(_mm_bsrli_si128(scale_0, 8)), p16_1);
++                p16_2 = _mm_madd_epi16(_mm_cvtepi8_epi16(scale_1), p16_2);
++                p16_3 = _mm_madd_epi16(_mm_cvtepi8_epi16(_mm_bsrli_si128(scale_1, 8)), p16_3);
++                p16_4 = _mm_madd_epi16(_mm_cvtepi8_epi16(scale_2), p16_4);
++                p16_5 = _mm_madd_epi16(_mm_cvtepi8_epi16(_mm_bsrli_si128(scale_2, 8)), p16_5);
++                p16_6 = _mm_madd_epi16(_mm_cvtepi8_epi16(scale_3), p16_6);
++                p16_7 = _mm_madd_epi16(_mm_cvtepi8_epi16(_mm_bsrli_si128(scale_3, 8)), p16_7);
++
++                sumi_0 = _mm_add_epi32(sumi_0, _mm_add_epi32(p16_0, p16_2));
++                sumi_1 = _mm_add_epi32(sumi_1, _mm_add_epi32(p16_1, p16_3));
++                sumi_0 = _mm_add_epi32(sumi_0, _mm_add_epi32(p16_4, p16_6));
++                sumi_1 = _mm_add_epi32(sumi_1, _mm_add_epi32(p16_5, p16_7));
++
++            }
++
++            sumi_0 = _mm_sub_epi32(sumi_0, q8sclsub_0);
++            sumi_1 = _mm_sub_epi32(sumi_1, q8sclsub_1);
++            const __m256i sumi = MM256_SET_M128I(sumi_1, sumi_0);
++            acc[row] = _mm256_add_ps(_mm256_mul_ps(_mm256_set1_ps(d), _mm256_cvtepi32_ps(sumi)), acc[row]);
++        }
++    }
++
++    out[0] = hsum_float_8(acc[0]);
++    out[1] = hsum_float_8(acc[1]);
++
++#else
++    ggml_vec_dot_q6_K_q8_K(n, out, 0, a, 0, input, 0, 1);
++    ggml_vec_dot_q6_K_q8_K(n, out + 1, 0, b, 0, input, 0, 1);
++#endif
++}
+--- a/src/llama-model-loader.cpp
++++ b/src/llama-model-loader.cpp
+@@ -1,6 +1,7 @@
+ #include "llama-model-loader.h"
+ 
+ #include "ggml-alloc.h"
++#include "ggml-cpu.h"
+ #include "ggml.h"
+ #include "gguf.h"
+ #include "llama-hparams.h"
+@@ -1359,6 +1360,22 @@
+     }
+ 
+     GGML_ASSERT(ggml_nbytes(&t_meta) == ggml_nbytes(cur));
++    const unsigned weight_mode = ggml_cpu_xllama_weight_mode();
++    const std::string weight_name = tn.str();
++    const bool is_embedding = weight_name == "token_embd.weight" || weight_name == "output.weight";
++    const bool compress = t_meta.type == GGML_TYPE_Q6_K &&
++        ((is_embedding && (weight_mode & 2)) || (!is_embedding && (weight_mode & 1)));
++    if (compress) {
++        if (use_mmap || no_alloc || is_lazy || t_meta.ne[2] != 1 || t_meta.ne[3] != 1) {
++            throw std::runtime_error("experimental compression requires an allocated, non-mapped matrix");
++        }
++        t_meta.type = GGML_TYPE_Q4_K;
++        t_meta.nb[0] = ggml_type_size(t_meta.type);
++        t_meta.nb[1] = ggml_row_size(t_meta.type, t_meta.ne[0]);
++        t_meta.nb[2] = t_meta.nb[1] * t_meta.ne[1];
++        t_meta.nb[3] = t_meta.nb[2] * t_meta.ne[2];
++    }
++
+ 
+     ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
+     if (buft == nullptr) {
+@@ -1637,6 +1654,36 @@
+         size_t n_size = ggml_nbytes(cur);
+ 
+         const bool from_mapping = use_mmap || lazy.has(cur);
++
++        if (cur->type != weight->tensor->type) {
++            if (from_mapping || !ggml_backend_buffer_is_host(cur->buffer) ||
++                cur->type != GGML_TYPE_Q4_K || weight->tensor->type != GGML_TYPE_Q6_K) {
++                throw std::runtime_error("unsupported experimental weight conversion");
++            }
++            const auto & file = files.at(weight->idx);
++            const size_t source_row = ggml_row_size(GGML_TYPE_Q6_K, cur->ne[0]);
++            const size_t target_row = ggml_row_size(GGML_TYPE_Q4_K, cur->ne[0]);
++            constexpr int64_t chunk_rows = 32;
++            std::vector<uint8_t> packed(source_row * chunk_rows);
++            std::vector<float> unpacked(cur->ne[0]);
++            const auto dequantize = ggml_get_type_traits(GGML_TYPE_Q6_K)->to_float;
++            const auto quantize = ggml_get_type_traits(GGML_TYPE_Q4_K)->from_float_ref;
++            file->seek(weight->offs, SEEK_SET);
++            for (int64_t row = 0; row < ggml_nrows(cur); row += chunk_rows) {
++                const int64_t count = std::min(chunk_rows, ggml_nrows(cur) - row);
++                file->read_raw(packed.data(), source_row * count);
++                for (int64_t j = 0; j < count; ++j) {
++                    dequantize(packed.data() + j * source_row, unpacked.data(), cur->ne[0]);
++                    quantize(unpacked.data(), (uint8_t *) cur->data + (row + j) * target_row, cur->ne[0]);
++                }
++            }
++            if (!ggml_validate_row_data(cur->type, cur->data, n_size)) {
++                throw std::runtime_error("experimental weight conversion produced invalid data");
++            }
++            ggml_cpu_xllama_note_weight(ggml_nbytes(weight->tensor), n_size);
++            size_done += ggml_nbytes(weight->tensor);
++            continue;
++        }
+ 
+         if (from_mapping) {
+             const auto & mapping = mappings.at(weight->idx);
+--- a/src/llama-model.cpp
++++ b/src/llama-model.cpp
+@@ -3297,6 +3297,12 @@
+     return model->ftype();
+ }
+ 
++uint64_t llama_model_xllama_resident_bytes(const llama_model * model) {
++    uint64_t bytes = 0;
++    for (const auto & entry : model->memory_breakdown()) { bytes += entry.second; }
++    return bytes;
++}
++
+ uint64_t llama_model_size(const llama_model * model) {
+     return model->size();
+ }
+--- a/include/llama.h
++++ b/include/llama.h
+@@ -647,6 +647,9 @@
+     // Returns the total size of all the tensors in the model in bytes
+     LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
+ 
++    // Experimental: sum of allocated weight backend buffers, including alignment.
++    LLAMA_API uint64_t llama_model_xllama_resident_bytes(const struct llama_model * model);
++
+     // Get the default chat template. Returns nullptr if not available
+     // If name is NULL, returns the default chat template
+     LLAMA_API const char * llama_model_chat_template(const struct llama_model * model, const char * name);

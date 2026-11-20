@@ -62,6 +62,7 @@ add_executable(xllama-tests
     test_speculative.cpp
     test_capture_probe.cpp
     test_gpu_probe.cpp
+    test_xbox_one_experiment.cpp
 )
 
 target_link_libraries(xllama-tests PRIVATE xllama doctest::doctest)

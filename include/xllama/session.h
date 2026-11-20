@@ -58,9 +58,17 @@ struct SessionParams {
     // ORT sessions ignore this field. Hybrid caches that refuse tail rewind
     // disable speculation at runtime for that generation (no KV corruption).
     bool prompt_lookup = false;
+
+    // Reviewed One X CPU experiments, scoped to a LAN request. Zero is stock.
+    unsigned cpu_experiment_flags = 0;
+
+    // Load-time Q6_K to Q4_K RAM compression: body=1, embedding/output=2.
+    unsigned weight_compression = 0;
 };
 
 struct GenerateParams {
+    // Controlled benchmarks can discard KV state without reloading weights.
+    bool clear_kv = false;
     std::string prompt;
     int n_predict = 96;
     // Shared with InferenceParams via xllama/sampling.h — see #125. The two
