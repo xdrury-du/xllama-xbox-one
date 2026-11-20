@@ -4,3 +4,6 @@ LICENSES/*-LICENSE -text
 LICENSES/*-LICENSE.txt -text
 LICENSES/*-NOTICE -text
 LICENSES/*-ThirdPartyNotices.txt -text
+
+# Preserve unified patch syntax and LF context on Windows checkouts.
+patches/*.patch text eol=lf whitespace=-blank-at-eol

@@ -61,7 +61,7 @@
  struct ggml_xllama_op_stat ggml_cpu_xllama_op_stat(int op) {
      struct ggml_xllama_op_stat empty = {0, 0, 0};
 @@ -1234,6 +1251,31 @@
-
+ 
      const void * wdata = (src1->type == vec_dot_type) ? src1->data : params->wdata;
      const size_t row_size = ggml_row_size(vec_dot_type, ne10);
 +
@@ -89,7 +89,7 @@
 +        return;
 +    }
 +#endif
-
+ 
      assert(ne12 % ne02 == 0);
      assert(ne13 % ne03 == 0);
 --- a/ggml/src/ggml-cpu/arch/x86/quants.c
@@ -330,7 +330,7 @@
 +++ b/src/llama-model-loader.cpp
 @@ -1,6 +1,7 @@
  #include "llama-model-loader.h"
-
+ 
  #include "ggml-alloc.h"
 +#include "ggml-cpu.h"
  #include "ggml.h"
@@ -338,7 +338,7 @@
  #include "llama-hparams.h"
 @@ -1359,6 +1360,22 @@
      }
-
+ 
      GGML_ASSERT(ggml_nbytes(&t_meta) == ggml_nbytes(cur));
 +    const unsigned weight_mode = ggml_cpu_xllama_weight_mode();
 +    const std::string weight_name = tn.str();
@@ -356,12 +356,12 @@
 +        t_meta.nb[3] = t_meta.nb[2] * t_meta.ne[2];
 +    }
 +
-
+ 
      ggml_backend_buffer_type_t buft = buft_for_tensor(&t_meta);
      if (buft == nullptr) {
 @@ -1637,6 +1654,36 @@
          size_t n_size = ggml_nbytes(cur);
-
+ 
          const bool from_mapping = use_mmap || lazy.has(cur);
 +
 +        if (cur->type != weight->tensor->type) {
@@ -393,7 +393,7 @@
 +            size_done += ggml_nbytes(weight->tensor);
 +            continue;
 +        }
-
+ 
          if (from_mapping) {
              const auto & mapping = mappings.at(weight->idx);
 --- a/src/llama-model.cpp
@@ -401,7 +401,7 @@
 @@ -3297,6 +3297,12 @@
      return model->ftype();
  }
-
+ 
 +uint64_t llama_model_xllama_resident_bytes(const llama_model * model) {
 +    uint64_t bytes = 0;
 +    for (const auto & entry : model->memory_breakdown()) { bytes += entry.second; }
@@ -416,7 +416,7 @@
 @@ -647,6 +647,9 @@
      // Returns the total size of all the tensors in the model in bytes
      LLAMA_API uint64_t llama_model_size(const struct llama_model * model);
-
+ 
 +    // Experimental: sum of allocated weight backend buffers, including alignment.
 +    LLAMA_API uint64_t llama_model_xllama_resident_bytes(const struct llama_model * model);
 +
