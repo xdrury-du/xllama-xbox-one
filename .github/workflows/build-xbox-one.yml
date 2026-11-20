@@ -55,6 +55,11 @@ jobs:
           git submodule update --init --depth 1 llama.cpp
           bash scripts/apply-uwp-patches.sh
           bash scripts/check-uwp-sources.sh
+      - name: Test paired kernels and GGUF compression with MSVC AVX
+        shell: bash
+        run: |
+          git clone --depth 1 --branch v2.4.11 https://github.com/doctest/doctest.git "$RUNNER_TEMP/xllama-doctest"
+          DOCTEST_ROOT="$RUNNER_TEMP/xllama-doctest" scripts/test-one-x-cpu-patch.sh
       - name: Build Jaguar AVX CPU package
         shell: pwsh
         run: |

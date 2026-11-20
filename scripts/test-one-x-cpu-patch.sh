@@ -42,5 +42,9 @@ args=()
 if [[ "$(uname -s)" == Darwin ]]; then args+=(-DCMAKE_OSX_ARCHITECTURES=x86_64); fi
 "$cmake_bin" -S "$stage" -B "$stage/build" -DCMAKE_BUILD_TYPE=Release \
     -DSMOL_REPO="$repo" -DSMOL_DOCTEST="$doctest_root" "${args[@]}"
-"$cmake_bin" --build "$stage/build" --target test-one-x-cpu-patch -j "${SMOL_BUILD_JOBS:-2}"
-"$stage/build/test-one-x-cpu-patch"
+"$cmake_bin" --build "$stage/build" --target test-one-x-cpu-patch --config Release -j "${SMOL_BUILD_JOBS:-2}"
+probe="$stage/build/test-one-x-cpu-patch"
+if [[ -f "$stage/build/Release/test-one-x-cpu-patch.exe" ]]; then
+    probe="$stage/build/Release/test-one-x-cpu-patch.exe"
+fi
+"$probe"
