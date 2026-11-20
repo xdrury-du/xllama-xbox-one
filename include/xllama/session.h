@@ -61,6 +61,9 @@ struct SessionParams {
 
     // Reviewed One X CPU experiments, scoped to a LAN request. Zero is stock.
     unsigned cpu_experiment_flags = 0;
+
+    // Load-time Q6_K to Q4_K RAM compression: body=1, embedding/output=2.
+    unsigned weight_compression = 0;
 };
 
 struct GenerateParams {

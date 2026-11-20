@@ -15,6 +15,7 @@
 #include "pch.h"
 #include <atomic>
 #include <winrt/Windows.Data.Json.h>
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Windows.Networking.Sockets.h>
 #include <winrt/Windows.System.Threading.h>
 // clang-format on
@@ -66,6 +67,7 @@
 
     #ifdef XLLAMA_XBOX_ONE
         #include "ggml-cpu.h"
+        #include "llama.h"
     #endif
 
 namespace xllama::api {
@@ -1243,6 +1245,14 @@ std::string handle_chat_locked(const std::string& body, const char*& status,
                 {"cpu_experiment_flags", ggml_cpu_xllama_flags()},
                 {"cpu_guided_calls", ggml_cpu_xllama_guided_calls()},
                 {"cpu_row_calls", ggml_cpu_xllama_row_calls()},
+                {"cpu_pair_q4_calls", ggml_cpu_xllama_pair_q4_calls()},
+                {"cpu_pair_q6_calls", ggml_cpu_xllama_pair_q6_calls()},
+                {"weight_compression_mode", applied.weight_compression},
+                {"weight_compressed_tensors", ggml_cpu_xllama_weight_tensors()},
+                {"weight_saved_bytes", ggml_cpu_xllama_weight_saved_bytes()},
+                {"resident_model_weight_bytes",
+                 llama_model_xllama_resident_bytes(
+                     static_cast<const llama_model*>(session->resident_llama_model()))},
                 {"gpu_calls", gpu_stats.calls},
                 {"gpu_dispatches", gpu_stats.dispatches},
                 {"gpu_time_valid", gpu_stats.gpu_time_valid()},
@@ -2154,6 +2164,36 @@ void handle_connection(StreamSocket const& socket, uint64_t generation) {
         }
 
     #ifdef XLLAMA_XBOX_ONE
+        if (req.method == "GET" && req.path == "/v1/experiments/info") {
+            const auto v = winrt::Windows::ApplicationModel::Package::Current().Id().Version();
+            const std::string version = std::to_string(v.Major) + "." + std::to_string(v.Minor) +
+                                        "." + std::to_string(v.Build) + "." +
+                                        std::to_string(v.Revision);
+            nlohmann::json info = {{"version", version},
+                                   {"weight_experiment_protocol", 1},
+                                   {"max_reply_tokens", 64},
+                                   {"app_memory_limit_bytes",
+                                    winrt::Windows::System::MemoryManager::AppMemoryUsageLimit()}};
+            write_response(socket, "200 OK", info.dump());
+            return;
+        }
+        if (req.method == "POST" && req.path == "/v1/experiments/reset") {
+            auto permit = acquire_compute_job_or_busy();
+            if (!permit) {
+                write_response(socket, ::xllama::kApiBusyStatus, error_json("busy"));
+                return;
+            }
+            auto hub_lock = acquire_hub_or_busy();
+            if (!hub_lock.owns_lock()) {
+                write_response(socket, "503 Service Unavailable", error_json("busy"));
+                return;
+            }
+            ::xllama::session_hub().reset_locked();
+            ggml_cpu_xllama_set_flags(0);
+            ggml_cpu_xllama_weight_end();
+            write_response(socket, "200 OK", "{\"reset\":true}");
+            return;
+        }
         if (req.method == "POST" && req.path == "/v1/diagnostics/gpu-selftest") {
             auto permit = acquire_compute_job_or_busy();
             if (!permit) {

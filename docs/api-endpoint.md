@@ -466,3 +466,26 @@ with operation names, call counts, inclusive `wall_ms`, and tagged
 `output_matmul_ms`. Profiling covers prefill plus decode and may perturb timing.
 It is excluded from the speed comparison. CPU switches are scoped to generation
 and reset before the request releases its compute permit.
+
+### Short weight and matrix experiments
+
+The One X build also admits `smol-pair-q4`, `smol-pair-q6`, `smol-pair-all`,
+`smol-compress-body`, `smol-compress-head` and `smol-compress-all`. They use the
+same explicit 1 through 64 reply limit. Weight compression is part of session
+load identity, so returning to a normal GUI/API session reloads stock weights.
+Generation kernel flags and load-time conversion modes have separate scope
+guards. See [the protocol](ministral-one-x-campaign.md#weight-and-matrix-campaign).
+
+`GET /v1/experiments/info` reports the actual package version, weight protocol
+revision, reply cap and process memory allowance. `POST /v1/experiments/reset`
+unloads the one resident session under the normal compute permit and hub lock.
+It returns HTTP 503 when busy and does not modify model files or settings.
+These routes are only compiled into the One X experiment build.
+
+Stream metrics add `cpu_pair_q4_calls`, `cpu_pair_q6_calls`,
+`weight_compression_mode`, `weight_compressed_tensors`, `weight_saved_bytes`
+and `resident_model_weight_bytes`. Pair counters record worker-zero calls on
+the actual paired path. Weight bytes report allocated model backend buffers,
+including alignment, separately from sampled process RSS and source file size.
+Conversion counts and savings persist with the resident model and reset on the
+next model load. Compression is restricted to non-mapped CPU host buffers.

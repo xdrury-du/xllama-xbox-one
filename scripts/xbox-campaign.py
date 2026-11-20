@@ -247,7 +247,7 @@ class Campaign:
                 request = urllib.request.Request(self.base + "/v1/chat/completions",
                     data=json.dumps(payload).encode(), headers={"Content-Type": "application/json"})
                 try:
-                    response = self.opener.open(request, timeout=180)
+                    response = self.opener.open(request, timeout=getattr(self, "socket_timeout_seconds", 180))
                     break
                 except urllib.error.HTTPError as error:
                     body = error.read().decode()

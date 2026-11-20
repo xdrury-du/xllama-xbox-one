@@ -65,3 +65,28 @@ TEST_CASE("One X short CPU profiles admit only reviewed independent flags") {
     REQUIRE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", "baseline", reset));
     CHECK(reset.cpu_experiment_flags == 0);
 }
+
+TEST_CASE("One X weight modes identify resident weights and reset independently of kernels") {
+    xllama::SessionParams base;
+    REQUIRE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", "smol-base", base));
+    for (const auto& item : {std::pair{"smol-compress-body", 1u},
+                             {"smol-compress-head", 2u},
+                             {"smol-compress-all", 3u}}) {
+        auto next = base;
+        REQUIRE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", item.first, next));
+        CHECK(next.weight_compression == item.second);
+        CHECK(next.cpu_experiment_flags == 0);
+        CHECK_FALSE(xllama::same_load(base, next));
+        CHECK(xllama::xbox_one_experiment_requires_reload(base, next));
+        REQUIRE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", "smol-base", next));
+        CHECK(next.weight_compression == 0);
+    }
+    for (const auto& item :
+         {std::pair{"smol-pair-q4", 8u}, {"smol-pair-q6", 16u}, {"smol-pair-all", 24u}}) {
+        auto next = base;
+        REQUIRE(xllama::apply_xbox_one_experiment("ministral3-3b-instruct", item.first, next));
+        CHECK(next.cpu_experiment_flags == item.second);
+        CHECK(next.weight_compression == 0);
+        CHECK(xllama::xbox_one_experiment_requires_reload(base, next));
+    }
+}

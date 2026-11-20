@@ -43,3 +43,14 @@ formats change. `scripts/test-one-x-cpu-patch.sh` verifies the patch against an
 isolated checkout, including AVX-only host correctness. Host timings are not
 Xbox performance evidence. See the short protocol in
 [ministral-one-x-campaign.md](../docs/ministral-one-x-campaign.md).
+
+`0003-one-x-weights-paired-dot.patch` adds default-off paired Q4_K/Q6_K
+AVX dot products and load-time Q6_K-to-Q4_K compression of selected RAM
+weights. Paired rows share activation loads and retain per-row reduction order.
+Compression uses bounded read chunks, requires non-mapped host buffers and
+leaves the source GGUF unchanged. A separate load-mode guard resets on exit.
+The resident-buffer byte query sums actual backend allocations rather than the
+GGUF's original tensor sizes. Tests cover exact paired outputs and a synthetic
+GGUF loaded under each compression mode, including source-file preservation.
+See [the weight campaign](../docs/ministral-one-x-campaign.md#weight-and-matrix-campaign)
+for the quality and memory verdict rules. Requantization may reduce quality.

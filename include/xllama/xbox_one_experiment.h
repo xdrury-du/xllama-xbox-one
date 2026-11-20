@@ -22,7 +22,9 @@ inline bool apply_xbox_one_experiment(std::string_view model, std::string_view i
     if (id != "baseline" && id != "gpu-1" && id != "gpu-8" && id != "gpu-27" && id != "threads-4" &&
         id != "threads-2" && id != "ubatch-64" && id != "ubatch-256" && id != "kv-q8" &&
         id != "prompt-lookup" && id != "smol-base" && id != "smol-profile" && id != "smol-guided" &&
-        id != "smol-row" && id != "smol-both")
+        id != "smol-row" && id != "smol-both" && id != "smol-pair-q4" && id != "smol-pair-q6" &&
+        id != "smol-pair-all" && id != "smol-compress-body" && id != "smol-compress-head" &&
+        id != "smol-compress-all")
         return false;
     if (model != "ministral3-3b-instruct")
         return false;
@@ -34,6 +36,7 @@ inline bool apply_xbox_one_experiment(std::string_view model, std::string_view i
     params.kv_q8 = false;
     params.prompt_lookup = false;
     params.cpu_experiment_flags = 0;
+    params.weight_compression = 0;
     if (id == "gpu-1")
         params.n_gpu_layers = 1;
     if (id == "gpu-8")
@@ -60,6 +63,18 @@ inline bool apply_xbox_one_experiment(std::string_view model, std::string_view i
         params.cpu_experiment_flags = 4;
     if (id == "smol-both")
         params.cpu_experiment_flags = 6;
+    if (id == "smol-pair-q4")
+        params.cpu_experiment_flags = 8;
+    if (id == "smol-pair-q6")
+        params.cpu_experiment_flags = 16;
+    if (id == "smol-pair-all")
+        params.cpu_experiment_flags = 24;
+    if (id == "smol-compress-body")
+        params.weight_compression = 1;
+    if (id == "smol-compress-head")
+        params.weight_compression = 2;
+    if (id == "smol-compress-all")
+        params.weight_compression = 3;
     return true;
 }
 

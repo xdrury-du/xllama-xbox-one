@@ -14,6 +14,10 @@
 #include "xllama/utf8_utils.h"
 #include "xllama/xbox_one_profile.h"
 
+#ifdef XLLAMA_XBOX_ONE
+    #include "ggml-cpu.h"
+#endif
+
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
@@ -1313,6 +1317,26 @@ std::unique_ptr<Session> create_llama(const SessionParams& sp, std::string* err)
     #endif
 
     install_llama_log();
+    #ifdef XLLAMA_XBOX_ONE
+    struct WeightLoadScope {
+        explicit WeightLoadScope(unsigned mode) {
+            ggml_cpu_xllama_weight_begin(mode);
+        }
+        ~WeightLoadScope() {
+            ggml_cpu_xllama_weight_end();
+        }
+    };
+    if (sp.weight_compression > 3 || (sp.weight_compression && sp.n_gpu_layers != 0)) {
+        if (err)
+            *err = "weight compression requires a reviewed CPU-only mode";
+        return nullptr;
+    }
+    WeightLoadScope weight_scope(sp.weight_compression);
+    if (sp.weight_compression) {
+        mparams.load_mode = LLAMA_LOAD_MODE_NONE;
+        mparams.use_extra_bufts = false;
+    }
+    #endif
     llama_model* raw_model = llama_model_load_from_file(abs_path.c_str(), mparams);
     log_gguf_ws("after model load");
     if (!raw_model) {

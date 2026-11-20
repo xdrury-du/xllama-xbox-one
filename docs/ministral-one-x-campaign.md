@@ -183,8 +183,8 @@ These adapt the guided scheduling and single-row work sharing described in
 to this pin and the Xbox CPU. No ARM intrinsics or trained model weights are imported.
 The output vocabulary already has 131072 rows, divisible by 32. The greedy sampler
 already scans logits without sorting. Those observations are admission checks,
-not new optimizations or measured speedups. Vocabulary pruning, weight
-requantization and custom attention remain separate, unimplemented candidates.
+not new optimizations or measured speedups. Vocabulary pruning and custom attention remain separate candidates. Weight
+requantization is covered by the following weight campaign.
 
 The new API profiles reject omitted reply limits or limits above 64 before model
 loading. CPU flags are process-global only while the serialized API generation
@@ -216,3 +216,64 @@ The patch-specific correctness gate is `scripts/test-one-x-cpu-patch.sh`. It
 builds an isolated copy of the pinned ggml with the optional patch and tests
 Ministral-width Q4_K/Q6_K matrices, odd row tails, single-row operations,
 multiple thread counts and stock fallback. It does not edit the submodule.
+
+## Weight and matrix campaign
+
+`scripts/xbox-weights-short.py` runs the next independent batch. It retains the
+same four capped content checks and three 64-token timing replies per profile.
+There are seven profiles, including a fresh same-build control. Every profile
+uses the unchanged official Ministral artifact, six CPU workers, F16 KV,
+8192 context, batch 512 and microbatch 128. No additional model lineage is used.
+
+| Profile            | Change                                                             |
+| ------------------ | ------------------------------------------------------------------ |
+| smol-base          | Both kernel and compression switches off                           |
+| smol-pair-q4       | Two Q4_K matrix output rows share Q8 activation loads              |
+| smol-pair-q6       | The same approach for Q6_K matrices                                |
+| smol-pair-all      | Both paired dot-product kernels                                    |
+| smol-compress-body | Requantize the 26 Q6_K transformer matrices to Q4_K during loading |
+| smol-compress-head | Requantize the tied embedding/output matrix only                   |
+| smol-compress-all  | Requantize all 27 Q6_K matrices                                    |
+
+Compression changes RAM weights only. It does not shrink or overwrite the
+source GGUF. The expected reductions are 105431040 bytes for transformer
+matrices, 103809024 for embedding/output, and 209240064 combined. These are
+format-derived expectations until verified by the console's actual allocated
+weight-buffer sizes and conversion counters. Source Q6 weights were already
+quantized, so this second quantization may add error compared with full-precision
+quantization. No vocabulary rows are removed.
+
+The runner verifies the installed package version, protocol and Game memory
+allowance before inference. `build-info.json` must include the exact
+`required_console_version` from the verified installer. Each profile unloads
+through the CPU reset endpoint and performs an eight-token-capped warmup.
+Loading and conversion have a separate 600-second guard because they occur
+before streaming begins. Measured replies retain the 180-second guard and
+64-token cap. The default batch has a maximum combined reply budget of 1792
+tokens, including warmups. It does not run the historical long-response suite.
+
+Improved requires all four content checks, three valid equal-length timing
+samples, repeatable timing text and proven candidate execution. A kernel
+candidate must retain exact control text. A compression candidate may change
+text but must verify both the expected converted tensor count and the exact
+resident weight-buffer reduction. The performance gate is at least five percent
+higher median decode throughput, or, for compression, at least five percent
+lower sampled steady-generation RSS with median decode within five percent of
+the control. These narrow checks do not establish general quality equivalence.
+Strict JSON-only formatting is reported separately from JSON content correctness.
+
+Paired kernels preserve each row's original accumulation order. The isolated
+numerical gate compares stock and candidate results bit for bit at widths 256,
+3072 and 9216, with odd output-row counts and one, four and six workers. The
+small GGUF loader fixture contains synthetic weights, not another trained model.
+It verifies mode isolation, exact allocated-byte reductions and unchanged source
+bytes under all four load modes. No Mac timing is an Xbox performance result.
+
+```bash
+python3 scripts/xbox-weights-short.py --xbox <private-IP> --output <directory> --build-info <artifact-build-info.json>
+```
+
+Each profile produces its own HTML table and graph, all repetition outputs,
+load/warmup timing, actual weight-byte reduction, strict-format result and raw
+stream evidence. User-facing installer directories end in the package version.
+Source commit hashes remain in build receipts instead of folder names.

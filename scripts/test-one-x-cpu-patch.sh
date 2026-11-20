@@ -12,6 +12,7 @@ trap 'rm -rf "$stage"' EXIT
 mkdir "$stage/llama"
 git -C "$repo/llama.cpp" archive HEAD | tar -x -C "$stage/llama"
 git -C "$stage/llama" apply "$repo/patches/0002-one-x-cpu-experiments.patch"
+git -C "$stage/llama" apply "$repo/patches/0003-one-x-weights-paired-dot.patch"
 cat > "$stage/CMakeLists.txt" <<'CMAKE'
 # Copyright (c) 2026 xllama contributors
 # SPDX-License-Identifier: MIT
@@ -35,7 +36,7 @@ add_subdirectory(llama EXCLUDE_FROM_ALL)
 add_executable(test-one-x-cpu-patch "${SMOL_REPO}/tests/test_one_x_cpu_patch.cpp")
 target_include_directories(test-one-x-cpu-patch PRIVATE "${SMOL_DOCTEST}")
 target_compile_features(test-one-x-cpu-patch PRIVATE cxx_std_17)
-target_link_libraries(test-one-x-cpu-patch PRIVATE ggml ggml-cpu)
+target_link_libraries(test-one-x-cpu-patch PRIVATE llama ggml ggml-cpu)
 CMAKE
 args=()
 if [[ "$(uname -s)" == Darwin ]]; then args+=(-DCMAKE_OSX_ARCHITECTURES=x86_64); fi

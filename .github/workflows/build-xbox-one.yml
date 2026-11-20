@@ -37,7 +37,7 @@ jobs:
           cmake --build build/linux-test -j2
           ctest --test-dir build/linux-test --output-on-failure
       - name: Test Mac text chat client and experiment verdicts
-        run: python3 -m unittest tests/test_xbox_chat_client.py tests/test_xbox_campaign.py tests/test_xbox_smol_short.py
+        run: python3 -m unittest tests/test_xbox_chat_client.py tests/test_xbox_campaign.py tests/test_xbox_smol_short.py tests/test_xbox_weights_short.py
       - name: Test isolated optional CPU patch
         run: scripts/test-one-x-cpu-patch.sh
       - name: Check catalogue and documentation coherence
